@@ -1,3 +1,5 @@
+from dns_records import DNSHeader
+
 # Ensure that there are enough bytes remaining to read.
 def ensure_available(data, offset, length):
     if offset + length > len(data):
@@ -25,3 +27,18 @@ def read_uint32(data, offset):
 def read_bytes(data, offset, length):
     ensure_available(data, offset, length)
     return data[offset:offset+length], offset + length
+
+
+# Parse the header of a DNS message.
+# Returns: (header, next_offset) e.g. (DNSHeader(44325, 0x0100, 1, 0, 0, 0), 12)
+def parse_header(data):
+    offset = 0
+    message_id, offset = read_uint16(data, offset)
+    flags, offset = read_uint16(data, offset)
+    qdcount, offset = read_uint16(data, offset)
+    ancount, offset = read_uint16(data, offset)
+    nscount, offset = read_uint16(data, offset)
+    arcount, offset = read_uint16(data, offset)
+    header = DNSHeader(message_id, flags, qdcount, ancount, nscount, arcount)
+
+    return header, offset
