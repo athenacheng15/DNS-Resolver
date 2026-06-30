@@ -29,3 +29,31 @@ class DNSMessage:
         self.answers = answers
         self.authority = authority
         self.additional = additional
+
+# -----------------------------
+# DNS Lookup Tables
+# -----------------------------
+
+# DNS record type lookup table
+TYPE_MAP = {
+    1: "A",
+    2: "NS",
+    5: "CNAME",
+    12: "PTR",
+    28: "AAAA",
+}
+
+# DNS class lookup table
+CLASS_MAP = {
+    1: "IN",
+}
+
+# DNS response code lookup table
+RCODE_MAP = {
+    0: "NOERROR",
+    1: "FORMERR",
+    2: "SERVFAIL",
+    3: "NXDOMAIN",
+    4: "NOTIMP",
+    5: "REFUSED",
+}
