@@ -1,4 +1,5 @@
-from dns_records import DNSHeader
+from cProfile import label
+from dns_records import DNSHeader, DNSQuestion
 
 # Ensure that there are enough bytes remaining to read.
 def ensure_available(data, offset, length):
@@ -42,3 +43,21 @@ def parse_header(data):
     header = DNSHeader(message_id, flags, qdcount, ancount, nscount, arcount)
 
     return header, offset
+
+# Parse a DNS domain name.
+# Returns: (name, next_offset) e.g. ("www.example.com.", 29)
+def parse_name(data, offset):
+    labels = []
+
+    while True:
+        length, offset = read_bytes(data, offset, 1)
+        length = length[0]
+
+        if length == 0:
+            break
+
+        label_bytes, offset = read_bytes(data, offset, length)
+        label = label_bytes.decode('ascii')
+        labels.append(label)
+    
+    return f'{".".join(labels)}.', offset
