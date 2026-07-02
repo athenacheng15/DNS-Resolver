@@ -1,6 +1,6 @@
 import sys
-from dns_message import parse_header
-from dns_records import RCODE_MAP
+from dns_message import parse_header, parse_questions
+from dns_records import RCODE_MAP,  TYPE_MAP, CLASS_MAP
 
 def main():
     if len(sys.argv) != 2:
@@ -13,6 +13,17 @@ def main():
         data = file.read()
 
     header, offset = parse_header(data)
+    questions, offset = parse_questions(data, offset, header.qdcount)
+
+
+    print("Question")
+    print("---------")
+
+    for question in questions:
+        print(f"QNAME: {question.qname}")
+        print(f"QTYPE: {question.qtype} ({TYPE_MAP.get(question.qtype, 'UNKNOWN')})")
+        print(f"QCLASS: {question.qclass} ({CLASS_MAP.get(question.qclass, 'UNKNOWN')})")
+        print()
 
     print("DNS Header")
     print("----------")
