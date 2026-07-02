@@ -1,6 +1,14 @@
 # Changelog
 
-## 2026-06-3
+## 2026-07-02
+
+- [a02665e] Added DNS domain name parsing.
+- [ea62e42] Added parsing for DNS question sections.
+- [1613bbf] Updated parser output to print parsed questions.
+- [b246d51] Added support for compressed DNS names.
+- [ff243b0] Added DNS resource record and RDATA parsing.
+
+## 2026-06-30
 
 - [a693d15] Added DNS lookup tables for record types, classes, and response codes.
 - [7d766ea] Added DNS header flag parsing for QR, opcode, AA, TC, RD, RA, and RCODE.
