@@ -61,3 +61,27 @@ def parse_name(data, offset):
         labels.append(label)
     
     return f'{".".join(labels)}.', offset
+
+
+# Parse one DNS question.
+# Returns: (question, next_offset)
+
+def parse_question(data, offset):
+    name, offset = parse_name(data, offset)
+    qtype, offset = read_uint16(data, offset)
+    qclass, offset = read_uint16(data, offset)
+
+    question = DNSQuestion(name, qtype, qclass)
+    return question, offset
+
+
+# Parse all DNS questions based on QDCOUNT.
+# Returns: (questions, next_offset)
+
+def parse_questions(data, offset, qdcount):
+    questions = []
+    for _ in range(qdcount):
+        question, offset = parse_question(data, offset)
+        questions.append(question)
+
+    return questions, offset
