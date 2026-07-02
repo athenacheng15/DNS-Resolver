@@ -48,19 +48,72 @@ def parse_header(data):
 # Returns: (name, next_offset) e.g. ("www.example.com.", 29)
 def parse_name(data, offset):
     labels = []
+    jumped = False
+    original_offset = offset
+    jumps = 0
+    total_length = 0
+    visited_offsets = set()
 
     while True:
-        length, offset = read_bytes(data, offset, 1)
-        length = length[0]
 
+        ensure_available(data, offset, 1)
+
+        if offset in visited_offsets:
+            raise ValueError("Pointer loop detected")
+
+        visited_offsets.add(offset)
+        length = data[offset]
+
+        # Pointer: first two bits are 11
+        if (length & 0xC0) == 0xC0:
+            ensure_available(data, offset, 2)
+
+            if jumps > 20:
+                raise ValueError("Too many DNS compression pointer jumps")
+
+            pointer_bytes = data[offset:offset+2]
+            pointer_offset = int.from_bytes(pointer_bytes, 'big') & 0x3FFF  # Network Byte Order = Big Endian
+
+            if pointer_offset >= len(data):
+                raise ValueError("Pointer offset is out of bounds")
+
+            if not jumped:
+                original_offset = offset+2
+                jumped = True
+
+            offset = pointer_offset
+            jumps += 1
+            continue
+
+        # Invalid label type
+        if (length & 0xC0) != 0:
+            raise ValueError("Invalid DNS label format")
+
+        offset += 1
+
+        # End of name
         if length == 0:
+            if not jumped:
+                original_offset = offset
             break
 
-        label_bytes, offset = read_bytes(data, offset, length)
+        # Label length
+        if length > 63:
+            raise ValueError("Label length is too long (longer than 63 bytes)")
+
+        ensure_available(data, offset, length)
+        label_bytes = data[offset:offset+length]
         label = label_bytes.decode('ascii')
         labels.append(label)
-    
-    return f'{".".join(labels)}.', offset
+
+        total_length += length + 1
+
+        if total_length > 255:
+            raise ValueError("Domain name is too long (longer than 255 bytes)")
+
+        offset += length
+
+    return f'{".".join(labels)}.', original_offset
 
 
 # Parse one DNS question.
