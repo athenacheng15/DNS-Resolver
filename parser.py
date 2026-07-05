@@ -1,6 +1,23 @@
 import sys
-from dns_message import parse_header, parse_questions
+from dns_message import parse_header, parse_questions, parse_resource_records
 from dns_records import RCODE_MAP,  TYPE_MAP, CLASS_MAP
+
+def print_records(title, records):
+    print(f"{title}")
+    print("---------")
+
+    if len(records) == 0:
+        print("No records")
+        return
+
+    for record in records:
+        print(f"NAME: {record.name}")
+        print(f"TYPE: {record.rtype} ({TYPE_MAP.get(record.rtype, 'UNKNOWN')})")
+        print(f"CLASS: {record.rclass} ({CLASS_MAP.get(record.rclass, 'UNKNOWN')})")
+        print(f"TTL: {record.ttl}")
+        print(f"RDLENGTH: {record.rdlength}")
+        print(f"RDATA: {record.rdata}")
+
 
 def main():
     if len(sys.argv) != 2:
@@ -14,6 +31,9 @@ def main():
 
     header, offset = parse_header(data)
     questions, offset = parse_questions(data, offset, header.qdcount)
+    answers, offset = parse_resource_records(data, offset, header.ancount)
+    authorities, offset = parse_resource_records(data, offset, header.nscount)
+    additional, offset = parse_resource_records(data, offset, header.arcount)
 
 
     print("Question")
@@ -48,6 +68,10 @@ def main():
 
     print(f"Next offset: {offset}")
     print(f"File size: {len(data)} bytes")
+
+    print_records("Answers", answers)
+    print_records("Authorities", authorities)
+    print_records("Additional", additional)
     
 if __name__ == "__main__":
     main()
