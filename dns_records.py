@@ -50,6 +50,7 @@ TYPE_MAP = {
     2: "NS",
     5: "CNAME",
     12: "PTR",
+    15: "MX",
     28: "AAAA",
 }
 
