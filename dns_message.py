@@ -161,29 +161,47 @@ def parse_resource_record(data, offset):
 # Returns: (rdata, next_offset) e.g. ("142.250.181.14", 49) for an A record
 def parse_rdata(data, offset, rtype, rdlength):
     rdata_start = offset
+    rdata_end = offset + rdlength
 
-    # A record
-    if rtype == 1:
-        rdata, offset = read_bytes(data, offset, rdlength)
-        return ".".join(str(byte) for byte in rdata), offset
+    ensure_available(data, offset, rdlength)
 
-    # NS, CNAME, PTR
-    if rtype in (2, 5, 12):
-        name, new_offset = parse_name(data, offset)
-        return name, rdata_start + rdlength
+    try:
+
+        # A record: must be exactly 4 bytes
+        if rtype == 1:
+            if rdlength != 4:
+                return malformed_rdata("A record RDATA must be 4 bytes"), rdata_end
+
+            rdata, _ = read_bytes(data, offset, 4)
+            return ".".join(str(byte) for byte in rdata), rdata_end
+
+        # NS, CNAME, PTR: RDATA is a domain name
+        if rtype in (2, 5, 12):
+            name, _ = parse_name(data, offset)
+            return name, rdata_end
+        
+        # MX: 2 bytes preference + domain name
+        if rtype == 15:
+            if rdlength < 3:
+                return malformed_rdata("MX record RDATA is too short"), rdata_end
+
+            preference, name_offset = read_uint16(data, offset)
+            exchange, _ = parse_name(data, name_offset)
+
+            return {
+                "preference": preference,
+                "exchange": exchange
+            }, rdata_end
     
-    # MX
-    if rtype == 15:
-        preference, name_offset = read_uint16(data, offset)
-        exchange, new_offset = parse_name(data, name_offset)
+        # Unknown type: skip safely
+        rdata, _ = read_bytes(data, offset, rdlength)
         return {
-            "preference": preference,
-            "exchange": exchange
-        }, rdata_start + rdlength
-    
-    # Unknown type
-    rdata, offset = read_bytes(data, offset, rdlength)
-    return rdata, offset
+            "status": "unsupported",
+            "raw": rdata
+        }, rdata_end
+        
+    except ValueError as e:
+        return malformed_rdata(str(e)), rdata_end
 
 
 # Parse multiple DNS resource records.
@@ -197,3 +215,10 @@ def parse_resource_records(data, offset, count):
         records.append(record)
 
     return records, offset
+
+
+def malformed_rdata(reason):
+    return {
+        "status": "malformed",
+        "reason": reason
+    }
