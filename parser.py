@@ -4,52 +4,40 @@ from dns_records import RCODE_MAP,  TYPE_MAP, CLASS_MAP
 
 def print_records(title, records):
     print(f"{title}")
-    print("---------")
 
     if len(records) == 0:
         print("No records\n")
         return
 
     for record in records:
-        print(f"NAME: {record.name}")
-        print(f"TYPE: {record.rtype} ({TYPE_MAP.get(record.rtype, 'UNKNOWN')})")
-        print(f"CLASS: {record.rclass} ({CLASS_MAP.get(record.rclass, 'UNKNOWN')})")
-        print(f"TTL: {record.ttl}")
-        print(f"RDLENGTH: {record.rdlength}")
-        print(f"RDATA: {record.rdata}")
-        print()
+        print(f"{record.name} {record.ttl} {CLASS_MAP.get(record.rclass, 'UNKNOWN')} {TYPE_MAP.get(record.rtype, 'UNKNOWN')} {record.rdata}")
+    print()
+
 
 def print_questions(questions):
-    print("Question")
-    print("---------")
+    print("--- QUESTIONS ---")
     for question in questions:
-        print(f"QNAME: {question.qname}")
-        print(f"QTYPE: {question.qtype} ({TYPE_MAP.get(question.qtype, 'UNKNOWN')})")
-        print(f"QCLASS: {question.qclass} ({CLASS_MAP.get(question.qclass, 'UNKNOWN')})")
-        print()
+        print(f"{question.qname} {CLASS_MAP.get(question.qclass, 'UNKNOWN')} {TYPE_MAP.get(question.qtype, 'UNKNOWN')}")
+    print()
 
 
-def print_header(header):
-    print("DNS Header")
-    print("----------")
-    print(f"ID: {header.message_id}")
-    print(f"Flags: {header.flags}")
-    print(f"QDCOUNT: {header.qdcount}")
-    print(f"ANCOUNT: {header.ancount}")
-    print(f"NSCOUNT: {header.nscount}")
-    print(f"ARCOUNT: {header.arcount}")
+def print_counts(header):
+    print("--- COUNTS ---")
+    print(f"QDCOUNT: {header.qdcount} (Questions)")
+    print(f"ANCOUNT: {header.ancount} (Answers)")
+    print(f"NSCOUNT: {header.nscount} (Authorities)")
+    print(f"ARCOUNT: {header.arcount} (Additional)")
     print()
 
 
 def print_flags(header):
-    print("Flags")
-    print("-----------")
+    print("--- FLAGS ---")
     print(f"QR: {header.qr}")
     print(f"Opcode: {header.opcode}")
-    print(f"AA: {header.aa}")
-    print(f"TC: {header.tc}")
-    print(f"RD: {header.rd}")
-    print(f"RA: {header.ra}")
+    print(f"AA: {header.aa} (Authoritative Answer)")
+    print(f"TC: {header.tc} (Truncated)")
+    print(f"RD: {header.rd} (Recursion Desired)")
+    print(f"RA: {header.ra} (Recursion Available)")
     print(f"RCODE: {header.rcode} ({RCODE_MAP.get(header.rcode, 'UNKNOWN')})")
     print()
 
@@ -70,17 +58,17 @@ def main():
     authorities, offset = parse_resource_records(data, offset, header.nscount)
     additional, offset = parse_resource_records(data, offset, header.arcount)
 
-
-    print_questions(questions)
-    print_header(header)
+    print(f"ID : {header.message_id}")
     print_flags(header)
+    print_counts(header)
+    print_questions(questions)
+    print_records("--- ANSWERS ---", answers)
+    print_records("--- AUTHORITIES ---", authorities)
+    print_records("--- ADDITIONAL ---", additional)
 
-    print_records("Answers", answers)
-    print_records("Authorities", authorities)
-    print_records("Additional", additional)
-
-    print(f"Next offset: {offset}")
-    print(f"File size: {len(data)} bytes")
+    # For debugging:
+    # print(f"Next offset: {offset}")
+    # print(f"File size: {len(data)} bytes")
     
 if __name__ == "__main__":
     main()
