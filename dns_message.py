@@ -173,7 +173,7 @@ def parse_rdata(data, offset, rtype, rdlength):
                 return malformed_rdata("A record RDATA must be 4 bytes"), rdata_end
 
             rdata, _ = read_bytes(data, offset, 4)
-            return ".".join(str(byte) for byte in rdata), offset
+            return ".".join(str(byte) for byte in rdata), rdata_end
 
         # NS, CNAME, PTR: RDATA is a domain name
         if rtype in (2, 5, 12):
@@ -199,6 +199,7 @@ def parse_rdata(data, offset, rtype, rdlength):
             "status": "unsupported",
             "raw": rdata
         }, rdata_end
+        
     except ValueError as e:
         return malformed_rdata(str(e)), rdata_end
 
