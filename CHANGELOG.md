@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-07
+
+- [0074dce] Added parsing for root hints records.
+- [0f5136b] Documented the resolver query workflow.
+
+## 2026-07-05
+
+- [4236e44] Added parser output for DNS resource records.
+- [7007350] Reorganized DNS output formatting.
+- [ba9edcf] Added safer handling for malformed RDATA.
+- [d2d44cb] Fixed A record RDATA offset advancement.
+- [58799bf] Simplified the DNS parser output format.
+
 ## 2026-07-02
 
 - [a02665e] Added DNS domain name parsing.
