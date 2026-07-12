@@ -1,3 +1,4 @@
+from sre_parse import fix_flags
 import socket, struct
 
 
@@ -62,6 +63,50 @@ def encode_a_rdata(address):
         return socket.inet_aton(address)
     except OSError as e:
         raise ValueError(f"Invalid IPv4 address: {address}") from e
+
+
+def encode_mx_rdata(rdata):
+    preference = rdata["preference"]
+    exchange = rdata["exchange"]
+
+    return encode_uint16(preference) + encode_name(exchange)
+
+
+def encode_rdata(record):
+    if record.rtype == 1:
+        return encode_a_rdata(record.rdata)
+
+    if record.rtype in (2, 5, 12):
+        return encode_name(record.rdata)
+
+    if record.rtype == 15:
+        return encode_mx_rdata(record.rdata)
+
+    raise ValueError(f"Unsupported DNS record type: {record.rtype}")
+
+
+def encode_resource_record(record):
+
+    encoded_name = encode_name(record.name)
+    encoded_rdata = encode_rdata(record)
+
+    fixed_fields = struct.pack(
+        "!HHIH",
+        record.rtype,
+        record.rclass,
+        record.ttl,
+        len(encoded_rdata),
+    )
+    # Recalculate RDLENGTH from the actual encoded RDATA because root hints records store it as 0.
+
+    return encoded_name + fixed_fields + encoded_rdata
+
+
+def encode_records(records):
+    encoded = bytearray()
+    for record in records:
+        encoded.extend(encode_resource_record(record))
+    return bytes(encoded)
 
 
 def build_response_flags(query_header, rcode=0):
