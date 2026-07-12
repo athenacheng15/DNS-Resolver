@@ -1,4 +1,3 @@
-from asyncio import queues
 import sys, socket
 
 from root_hints import parse_root_hints
@@ -38,6 +37,24 @@ def create_server_socket(listen_port):
     return server_socket
 
 
+def create_request_state(client_address, header, question):
+    client_ip, client_port = client_address
+
+    return {
+        "client_address": client_ip,
+        "client_port": client_port,
+        "original_id": header.message_id,
+        "question": question,
+    }
+
+
+def decode_client_query(query_data):
+    header, offset = parse_header(query_data)
+    questions, offset = parse_questions(query_data, offset, header.qdcount)
+
+    return header, questions
+
+
 MAX_DNS_MESSAGE_SIZE = 4096
 
 
@@ -47,7 +64,7 @@ def run_server(server_socket):
         print(f"Received {len(query_data)} bytes from {client_address}")
 
         try:
-            header, questions = decoode_client_query(query_data)
+            header, questions = decode_client_query(query_data)
 
             if len(questions) == 0:
                 print("Invalid query: no questions")
@@ -59,24 +76,6 @@ def run_server(server_socket):
 
         except ValueError as e:
             print(f"Failed to parse DNS query: {e}")
-
-
-def decoode_client_query(query_data):
-    header, offset = parse_header(query_data)
-    questions, offset = parse_questions(query_data, offset, header.qdcount)
-
-    return header, questions
-
-
-def create_request_state(client_address, header, question):
-    client_ip, client_port = client_address
-
-    return {
-        "client_address": client_ip,
-        "client_port": client_port,
-        "original_id": header.message_id,
-        "question": question,
-    }
 
 
 def print_request_state(request_state):
