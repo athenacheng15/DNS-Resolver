@@ -68,14 +68,14 @@ def decoode_client_query(query_data):
     return header, questions
 
 
-def create_request_state(client_address, header, questions):
+def create_request_state(client_address, header, question):
     client_ip, client_port = client_address
 
     return {
         "client_address": client_ip,
         "client_port": client_port,
         "original_id": header.message_id,
-        "questions": questions,
+        "question": question,
     }
 
 
