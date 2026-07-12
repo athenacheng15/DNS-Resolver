@@ -119,3 +119,35 @@ def build_response_flags(query_header, rcode=0):
     flags |= rcode & 0xF
 
     return flags
+
+
+def encode_dns_response(
+    query_header, question, answers=None, authorities=None, additional=None, rcode=0
+):
+    answers = [] if answers is None else answers
+    authorities = [] if authorities is None else authorities
+    additional = [] if additional is None else additional
+
+    flags = build_response_flags(query_header, rcode)
+
+    header_bytes = encode_header(
+        message_id=query_header.message_id,
+        flags=flags,
+        question_count=1,
+        answer_count=len(answers),
+        authority_count=len(authorities),
+        additional_count=len(additional),
+    )
+
+    question_bytes = encode_question(question)
+    answer_bytes = encode_records(answers)
+    authority_bytes = encode_records(authorities)
+    additional_bytes = encode_records(additional)
+
+    return (
+        header_bytes
+        + question_bytes
+        + answer_bytes
+        + authority_bytes
+        + additional_bytes
+    )
