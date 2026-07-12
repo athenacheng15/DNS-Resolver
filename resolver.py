@@ -1,9 +1,9 @@
-from asyncio import queues
 import sys, socket
 
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions
 from dns_records import TYPE_MAP, CLASS_MAP
+from dns_encoder import encode_dns_response
 
 
 def parse_args():
@@ -38,36 +38,6 @@ def create_server_socket(listen_port):
     return server_socket
 
 
-MAX_DNS_MESSAGE_SIZE = 4096
-
-
-def run_server(server_socket):
-    while True:
-        query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
-        print(f"Received {len(query_data)} bytes from {client_address}")
-
-        try:
-            header, questions = decoode_client_query(query_data)
-
-            if len(questions) == 0:
-                print("Invalid query: no questions")
-                continue
-
-            question = questions[0]
-            request_state = create_request_state(client_address, header, question)
-            print_request_state(request_state)
-
-        except ValueError as e:
-            print(f"Failed to parse DNS query: {e}")
-
-
-def decoode_client_query(query_data):
-    header, offset = parse_header(query_data)
-    questions, offset = parse_questions(query_data, offset, header.qdcount)
-
-    return header, questions
-
-
 def create_request_state(client_address, header, question):
     client_ip, client_port = client_address
 
@@ -77,6 +47,48 @@ def create_request_state(client_address, header, question):
         "original_id": header.message_id,
         "question": question,
     }
+
+
+def decode_client_query(query_data):
+    header, offset = parse_header(query_data)
+    questions, offset = parse_questions(query_data, offset, header.qdcount)
+
+    return header, questions
+
+
+MAX_DNS_MESSAGE_SIZE = 4096
+
+
+def run_server(server_socket):
+    while True:
+        query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
+        print(f"Received {len(query_data)} bytes from {client_address}")
+
+        try:
+            header, questions = decode_client_query(query_data)
+
+            if len(questions) == 0:
+                print("Invalid query: no questions")
+                continue
+
+            question = questions[0]
+            request_state = create_request_state(client_address, header, question)
+            print_request_state(request_state)
+
+            response_data = encode_dns_response(
+                query_header=header,
+                question=question,
+            )
+
+            server_socket.sendto(
+                response_data,
+                client_address,
+            )
+
+            print(f"Sent {len(response_data)} bytes " f"to {client_address}")
+
+        except ValueError as e:
+            print(f"Failed to parse DNS query: {e}")
 
 
 def print_request_state(request_state):

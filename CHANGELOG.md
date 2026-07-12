@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-07-12
+
+- [0f83569] Added assembly for complete DNS response bytes.
+- [946152b] Added DNS resource record encoding.
+- [bcdf01c] Added DNS response header field encoding.
+- [a2e767e] Added DNS byte encoding helpers.
+- [85ebe97] Added handling for client queries.
+- [26c3076] Added decoding for client queries.
+- [bde31dd] Added UDP server socket setup.
+- [a426f14] Added root hints loading in the resolver.
+- [36f9c36] Added resolver CLI argument parsing.
+
 ## 2026-07-07
 
 - [0074dce] Added parsing for root hints records.
