@@ -46,6 +46,20 @@ def run_server(server_socket):
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
         print(f"Received {len(query_data)} bytes from {client_address}")
 
+        try:
+            header, questions = decoode_client_query(query_data)
+
+            if len(questions) == 0:
+                print("Invalid query: no questions")
+                continue
+
+            question = questions[0]
+            request_state = create_request_state(client_address, header, question)
+            print_request_state(request_state)
+
+        except ValueError as e:
+            print(f"Failed to parse DNS query: {e}")
+
 
 def decoode_client_query(query_data):
     header, offset = parse_header(query_data)
@@ -81,3 +95,20 @@ def print_request_state(request_state):
     print(f"QNAME: {question.qname}")
     print(f"QTYPE: {question.qtype} ({qtype_name})")
     print(f"QCLASS: {question.qclass} ({qclass_name})")
+
+
+def main():
+    root_hints_file, timeout, listen_port = parse_args()
+    root_ns_records, root_a_records, root_a_map = load_root_hints(root_hints_file)
+    server_socket = create_server_socket(listen_port)
+
+    try:
+        run_server(server_socket)
+    except KeyboardInterrupt:
+        print("Shutting down resolver server...")
+    finally:
+        server_socket.close()
+
+
+if __name__ == "__main__":
+    main()
