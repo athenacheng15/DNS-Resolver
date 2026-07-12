@@ -3,6 +3,7 @@ import sys, socket
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions
 from dns_records import TYPE_MAP, CLASS_MAP
+from dns_encoder import encode_dns_response
 
 
 def parse_args():
@@ -73,6 +74,18 @@ def run_server(server_socket):
             question = questions[0]
             request_state = create_request_state(client_address, header, question)
             print_request_state(request_state)
+
+            response_data = encode_dns_response(
+                query_header=header,
+                question=question,
+            )
+
+            server_socket.sendto(
+                response_data,
+                client_address,
+            )
+
+            print(f"Sent {len(response_data)} bytes " f"to {client_address}")
 
         except ValueError as e:
             print(f"Failed to parse DNS query: {e}")
