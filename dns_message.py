@@ -1,11 +1,22 @@
 from cProfile import label
-from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage
+from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
 
 
 # Ensure that there are enough bytes remaining to read.
 def ensure_available(data, offset, length):
     if offset + length > len(data):
         raise ValueError("Unexpected end of DNS message")
+
+
+def validate_rdata_name_end(name_end, rdata_end, record_type):
+    if name_end != rdata_end:
+        raise ValueError(f"{record_type} RDATA does not match RDLENGTH")
+
+
+def validate_records(records):
+    for record in records:
+        if isinstance(record.rdata, dict) and record.rdata.get("status") == "malformed":
+            raise ValueError(f"Malformed RDATA in record {record.name}")
 
 
 # Read an unsigned 16-bit integer.
@@ -181,7 +192,9 @@ def parse_rdata(data, offset, rtype, rdlength):
 
         # NS, CNAME, PTR: RDATA is a domain name
         if rtype in (2, 5, 12):
-            name, _ = parse_name(data, offset)
+            name, name_end = parse_name(data, offset)
+            type_name = TYPE_MAP[rtype]
+            validate_rdata_name_end(name_end, rdata_end, type_name)
             return name, rdata_end
 
         # MX: 2 bytes preference + domain name
@@ -190,7 +203,8 @@ def parse_rdata(data, offset, rtype, rdlength):
                 return malformed_rdata("MX record RDATA is too short"), rdata_end
 
             preference, name_offset = read_uint16(data, offset)
-            exchange, _ = parse_name(data, name_offset)
+            exchange, exchange_end = parse_name(data, name_offset)
+            validate_rdata_name_end(exchange_end, rdata_end, "MX")
 
             return {"preference": preference, "exchange": exchange}, rdata_end
 
@@ -228,6 +242,10 @@ def parse_dns_message(data):
 
     if offset != len(data):
         raise ValueError("Unexpected trailing data in DNS message")
+
+    validate_records(answers)
+    validate_records(authority)
+    validate_records(additional)
 
     return DNSMessage(
         header=header,
