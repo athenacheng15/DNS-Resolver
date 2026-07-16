@@ -111,7 +111,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
 MAX_DNS_MESSAGE_SIZE = 4096
 
 
-def run_server(server_socket):
+def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
         print(f"Received {len(query_data)} bytes from {client_address}")
@@ -127,10 +127,24 @@ def run_server(server_socket):
             request_state = create_request_state(client_address, header, question)
             print_request_state(request_state)
 
-            response_data = encode_dns_response(
-                query_header=header,
-                question=question,
+            local_response = build_root_hints_response(
+                question, root_ns_records, root_a_records, root_a_map
             )
+
+            if local_response is None:
+                response_data = encode_dns_response(
+                    query_header=header,
+                    question=question,
+                )
+            else:
+                response_data = encode_dns_response(
+                    query_header=header,
+                    question=question,
+                    answers=local_response["answers"],
+                    authorities=local_response["authorities"],
+                    additional=local_response["additional"],
+                    rcode=local_response["rcode"],
+                )
 
             server_socket.sendto(
                 response_data,
@@ -167,7 +181,7 @@ def main():
     server_socket = create_server_socket(listen_port)
 
     try:
-        run_server(server_socket)
+        run_server(server_socket, root_ns_records, root_a_records, root_a_map)
     except KeyboardInterrupt:
         print("Shutting down resolver server...")
     finally:
