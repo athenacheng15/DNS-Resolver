@@ -21,9 +21,6 @@ def parse_args():
 def load_root_hints(root_hints_file):
     root_ns_records, root_a_records, root_a_map = parse_root_hints(root_hints_file)
 
-    print(f"Loaded {len(root_ns_records)} root NS records")
-    print(f"Loaded {len(root_a_records)} root A records")
-
     return root_ns_records, root_a_records, root_a_map
 
 
@@ -32,8 +29,6 @@ def create_server_socket(listen_port):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server_address = ("127.0.0.1", listen_port)
     server_socket.bind(server_address)
-
-    print(f"Resolver server socket  listening on 127.0.0.1:{listen_port}")
 
     return server_socket
 
@@ -114,7 +109,6 @@ MAX_DNS_MESSAGE_SIZE = 4096
 def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
-        print(f"Received {len(query_data)} bytes from {client_address}")
 
         try:
             header, questions = decode_client_query(query_data)
@@ -125,7 +119,6 @@ def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
 
             question = questions[0]
             request_state = create_request_state(client_address, header, question)
-            print_request_state(request_state)
 
             local_response = build_root_hints_response(
                 question, root_ns_records, root_a_records, root_a_map
@@ -150,8 +143,6 @@ def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
                 response_data,
                 client_address,
             )
-
-            print(f"Sent {len(response_data)} bytes " f"to {client_address}")
 
         except ValueError as e:
             print(f"Failed to parse DNS query: {e}")
