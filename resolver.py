@@ -2,7 +2,10 @@ import sys, socket
 
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions
-from dns_encoder import encode_dns_response
+from dns_encoder import encode_dns_response, encode_upstream_query
+
+UPSTREAM_DNS_PORT = 53
+MAX_DNS_MESSAGE_SIZE = 4096
 
 
 def parse_args():
@@ -84,7 +87,24 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     return None
 
 
-MAX_DNS_MESSAGE_SIZE = 4096
+def send_upstream_query(server_ip, question, timeout):
+    transaction_id, query_data = encode_upstream_query(question)
+
+    upstream_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    upstream_socket.settimeout(timeout)
+
+    try:
+        upstream_socket.sendto(query_data, (server_ip, UPSTREAM_DNS_PORT))
+        response_data, response_address = upstream_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
+        return {
+            "transaction_id": transaction_id,
+            "response_data": response_data,
+            "response_address": response_address,
+        }
+    except socket.timeout:
+        return None
+    finally:
+        upstream_socket.close()
 
 
 def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
