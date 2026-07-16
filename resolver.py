@@ -96,6 +96,10 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     return None
 
 
+def get_root_server_ips(root_a_records):
+    return [record.rdata for record in root_a_records if record.rtype == 1]
+
+
 def validate_upstream_response(
     response_data,
     response_address,
@@ -144,7 +148,7 @@ def validate_upstream_response(
     return message
 
 
-def send_upstream_query(server_ip, question, timeout):
+def query_upstream_server(server_ip, question, timeout):
     transaction_id, query_data = encode_upstream_query(question)
 
     upstream_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -180,6 +184,16 @@ def send_upstream_query(server_ip, question, timeout):
             }
     finally:
         upstream_socket.close()
+
+
+def query_upstream_candidate(server_ips, question, timeout):
+    for server_ip in server_ips:
+        result = query_upstream_server(server_ip, question, timeout)
+
+        if result is not None:
+            return result
+
+    return None
 
 
 def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
