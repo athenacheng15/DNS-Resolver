@@ -1,4 +1,3 @@
-from sre_parse import fix_flags
 import socket, struct
 
 
