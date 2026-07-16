@@ -1,4 +1,4 @@
-import socket, struct
+import socket, struct, secrets
 
 
 def encode_uint16(value):
@@ -106,6 +106,28 @@ def encode_records(records):
     for record in records:
         encoded.extend(encode_resource_record(record))
     return bytes(encoded)
+
+
+def encode_upstream_query(question):
+    transaction_id = secrets.randbits(16)
+    flags = build_upstream_query_flags()
+
+    header_bytes = encode_header(
+        message_id=transaction_id,
+        flags=flags,
+        question_count=1,
+        answer_count=0,
+        authority_count=0,
+        additional_count=0,
+    )
+    question_bytes = encode_question(question)
+    query_data = header_bytes + question_bytes
+
+    return transaction_id, query_data
+
+
+def build_upstream_query_flags():
+    return 0
 
 
 def build_response_flags(query_header, rcode=0):
