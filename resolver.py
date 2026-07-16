@@ -1,7 +1,7 @@
-import sys, socket
+import sys, socket, time
 
 from root_hints import parse_root_hints
-from dns_message import parse_header, parse_questions
+from dns_message import parse_header, parse_questions, parse_dns_message
 from dns_encoder import encode_dns_response, encode_upstream_query
 
 UPSTREAM_DNS_PORT = 53
@@ -40,6 +40,15 @@ def normalize_dns_name(name):
         return "."
 
     return name.rstrip(".").lower() + "."
+
+
+def question_match(actual_question, expected_question):
+    return (
+        normalize_dns_name(actual_question.qname)
+        == normalize_dns_name(expected_question.qname)
+        and actual_question.qtype == expected_question.qtype
+        and actual_question.qclass == expected_question.qclass
+    )
 
 
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
@@ -87,24 +96,104 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     return None
 
 
-def send_upstream_query(server_ip, question, timeout):
+def get_root_server_ips(root_a_records):
+    return [record.rdata for record in root_a_records if record.rtype == 1]
+
+
+def validate_upstream_response(
+    response_data,
+    response_address,
+    expected_server_ip,
+    expected_transaction_id,
+    expected_question,
+):
+
+    source_ip, source_port = response_address
+
+    # The response must come from the server that was queried.
+    if source_ip != expected_server_ip:
+        raise ValueError("Upstream response came from the wrong IP address")
+
+    # DNS servers must respond from port 53.
+    if source_port != UPSTREAM_DNS_PORT:
+        raise ValueError("Upstream response came from the wrong port")
+
+    message = parse_dns_message(response_data)
+    header = message.header
+
+    if header.message_id != expected_transaction_id:
+        raise ValueError("Upstream response has the wrong transaction ID")
+    if header.qr != 1:
+        raise ValueError("Upstream response is not a DNS response")
+    if header.opcode != 0:
+        raise ValueError("Upstream response has an unsupported OPCODE")
+
+    # Do not retry with TCP. A truncated UDP response makes this
+    # candidate fail.
+    if header.tc != 0:
+        raise ValueError("Upstream response is truncated")
+
+    if header.qdcount != 1:
+        raise ValueError("Upstream response must contain exactly one question")
+
+    if len(message.questions) != 1:
+        raise ValueError("Parsed question count does not match QDCOUNT")
+
+    if not question_match(
+        message.questions[0],
+        expected_question,
+    ):
+        raise ValueError("Upstream response question does not match the query")
+
+    return message
+
+
+def query_upstream_server(server_ip, question, timeout):
     transaction_id, query_data = encode_upstream_query(question)
 
     upstream_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    upstream_socket.settimeout(timeout)
+    deadline = time.monotonic() + timeout
 
     try:
         upstream_socket.sendto(query_data, (server_ip, UPSTREAM_DNS_PORT))
-        response_data, response_address = upstream_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
-        return {
-            "transaction_id": transaction_id,
-            "response_data": response_data,
-            "response_address": response_address,
-        }
-    except socket.timeout:
-        return None
+        while True:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                return None
+
+            upstream_socket.settimeout(remaining_time)
+
+            try:
+                response_data, response_address = upstream_socket.recvfrom(
+                    MAX_DNS_MESSAGE_SIZE
+                )
+            except socket.timeout:
+                return None
+            try:
+                message = validate_upstream_response(
+                    response_data, response_address, server_ip, transaction_id, question
+                )
+            except ValueError:
+                continue  # Ignore invalid or unrelated UDP datagrams and keep waiting until the original timeout deadline.
+
+            return {
+                "transaction_id": transaction_id,
+                "response_data": response_data,
+                "response_address": response_address,
+                "message": message,
+            }
     finally:
         upstream_socket.close()
+
+
+def query_upstream_candidate(server_ips, question, timeout):
+    for server_ip in server_ips:
+        result = query_upstream_server(server_ip, question, timeout)
+
+        if result is not None:
+            return result
+
+    return None
 
 
 def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
