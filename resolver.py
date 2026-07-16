@@ -56,10 +56,62 @@ def decode_client_query(query_data):
     return header, questions
 
 
+def normalize_dns_name(name):
+    if name == ".":
+        return "."
+
+    return name.rstrip(".").lower() + "."
+
+
+def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
+    qname = normalize_dns_name(question.qname)
+
+    # Root hints only contains IN records
+    if question.qclass != 1:
+        return None
+
+    # Query: .NS
+    if qname == "." and question.qtype == 2:
+        answers = list(root_ns_records)
+        additional = []
+
+        # For every returned NS record, find its matching A glue records.
+        # The nested loop preserves: NS record order, A record file order.
+        for ns_record in root_ns_records:
+            ns_name = normalize_dns_name(ns_record.rdata)
+
+            for a_record in root_a_records:
+                a_name = normalize_dns_name(a_record.name)
+
+                if a_name == ns_name:
+                    additional.append(a_record)
+
+        return {
+            "answers": answers,
+            "authorities": [],
+            "additional": additional,
+            "rcode": 0,
+        }
+
+    # Query: a.root-servers.net. A, b.root-servers.net. A, etc.
+    if question.qtype == 1:
+        answers = root_a_map.get(qname, [])
+        if answers:
+            return {
+                "answers": list(answers),
+                "authorities": [],
+                "additional": [],
+                "rcode": 0,
+            }
+
+    # This query cannot be answered using named.root.
+    return None
+
+
 MAX_DNS_MESSAGE_SIZE = 4096
 
 
-def run_server(server_socket):
+def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
         print(f"Received {len(query_data)} bytes from {client_address}")
@@ -75,10 +127,24 @@ def run_server(server_socket):
             request_state = create_request_state(client_address, header, question)
             print_request_state(request_state)
 
-            response_data = encode_dns_response(
-                query_header=header,
-                question=question,
+            local_response = build_root_hints_response(
+                question, root_ns_records, root_a_records, root_a_map
             )
+
+            if local_response is None:
+                response_data = encode_dns_response(
+                    query_header=header,
+                    question=question,
+                )
+            else:
+                response_data = encode_dns_response(
+                    query_header=header,
+                    question=question,
+                    answers=local_response["answers"],
+                    authorities=local_response["authorities"],
+                    additional=local_response["additional"],
+                    rcode=local_response["rcode"],
+                )
 
             server_socket.sendto(
                 response_data,
@@ -115,7 +181,7 @@ def main():
     server_socket = create_server_socket(listen_port)
 
     try:
-        run_server(server_socket)
+        run_server(server_socket, root_ns_records, root_a_records, root_a_map)
     except KeyboardInterrupt:
         print("Shutting down resolver server...")
     finally:
