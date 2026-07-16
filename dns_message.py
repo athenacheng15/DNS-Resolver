@@ -1,5 +1,6 @@
 from cProfile import label
-from dns_records import DNSHeader, DNSQuestion, ResourceRecord
+from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage
+
 
 # Ensure that there are enough bytes remaining to read.
 def ensure_available(data, offset, length):
@@ -11,7 +12,7 @@ def ensure_available(data, offset, length):
 # Returns: (value, next_offset) e.g. (44325, 2) for 44325 at offset 2
 def read_uint16(data, offset):
     ensure_available(data, offset, 2)
-    value = int.from_bytes(data[offset:offset+2], 'big')  
+    value = int.from_bytes(data[offset : offset + 2], "big")
     return value, offset + 2
 
 
@@ -19,7 +20,7 @@ def read_uint16(data, offset):
 # Returns: (value, next_offset) e.g. (44325, 4) for 44325 at offset 4
 def read_uint32(data, offset):
     ensure_available(data, offset, 4)
-    value = int.from_bytes(data[offset:offset+4], 'big')
+    value = int.from_bytes(data[offset : offset + 4], "big")
     return value, offset + 4
 
 
@@ -27,7 +28,7 @@ def read_uint32(data, offset):
 # Returns: (bytes, next_offset) e.g. (b'\x03www', 16)
 def read_bytes(data, offset, length):
     ensure_available(data, offset, length)
-    return data[offset:offset+length], offset + length
+    return data[offset : offset + length], offset + length
 
 
 # Parse the header of a DNS message.
@@ -43,6 +44,7 @@ def parse_header(data):
     header = DNSHeader(message_id, flags, qdcount, ancount, nscount, arcount)
 
     return header, offset
+
 
 # Parse a DNS domain name.
 # Returns: (name, next_offset) e.g. ("www.example.com.", 29)
@@ -71,14 +73,16 @@ def parse_name(data, offset):
             if jumps > 20:
                 raise ValueError("Too many DNS compression pointer jumps")
 
-            pointer_bytes = data[offset:offset+2]
-            pointer_offset = int.from_bytes(pointer_bytes, 'big') & 0x3FFF  # Network Byte Order = Big Endian
+            pointer_bytes = data[offset : offset + 2]
+            pointer_offset = (
+                int.from_bytes(pointer_bytes, "big") & 0x3FFF
+            )  # Network Byte Order = Big Endian
 
             if pointer_offset >= len(data):
                 raise ValueError("Pointer offset is out of bounds")
 
             if not jumped:
-                original_offset = offset+2
+                original_offset = offset + 2
                 jumped = True
 
             offset = pointer_offset
@@ -102,8 +106,8 @@ def parse_name(data, offset):
             raise ValueError("Label length is too long (longer than 63 bytes)")
 
         ensure_available(data, offset, length)
-        label_bytes = data[offset:offset+length]
-        label = label_bytes.decode('ascii')
+        label_bytes = data[offset : offset + length]
+        label = label_bytes.decode("ascii")
         labels.append(label)
 
         total_length += length + 1
@@ -179,7 +183,7 @@ def parse_rdata(data, offset, rtype, rdlength):
         if rtype in (2, 5, 12):
             name, _ = parse_name(data, offset)
             return name, rdata_end
-        
+
         # MX: 2 bytes preference + domain name
         if rtype == 15:
             if rdlength < 3:
@@ -188,18 +192,12 @@ def parse_rdata(data, offset, rtype, rdlength):
             preference, name_offset = read_uint16(data, offset)
             exchange, _ = parse_name(data, name_offset)
 
-            return {
-                "preference": preference,
-                "exchange": exchange
-            }, rdata_end
-    
+            return {"preference": preference, "exchange": exchange}, rdata_end
+
         # Unknown type: skip safely
         rdata, _ = read_bytes(data, offset, rdlength)
-        return {
-            "status": "unsupported",
-            "raw": rdata
-        }, rdata_end
-        
+        return {"status": "unsupported", "raw": rdata}, rdata_end
+
     except ValueError as e:
         return malformed_rdata(str(e)), rdata_end
 
@@ -218,7 +216,23 @@ def parse_resource_records(data, offset, count):
 
 
 def malformed_rdata(reason):
-    return {
-        "status": "malformed",
-        "reason": reason
-    }
+    return {"status": "malformed", "reason": reason}
+
+
+def parse_dns_message(data):
+    header, offset = parse_header(data)
+    questions, offset = parse_questions(data, offset, header.qdcount)
+    answers, offset = parse_resource_records(data, offset, header.ancount)
+    authority, offset = parse_resource_records(data, offset, header.nscount)
+    additional, offset = parse_resource_records(data, offset, header.arcount)
+
+    if offset != len(data):
+        raise ValueError("Unexpected trailing data in DNS message")
+
+    return DNSMessage(
+        header=header,
+        questions=questions,
+        answers=answers,
+        authority=authority,
+        additional=additional,
+    )
