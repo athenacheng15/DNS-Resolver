@@ -10,9 +10,13 @@ MAX_DNS_MESSAGE_SIZE = 4096
 
 MAX_OUTBOUND_ATTEMPTS = 50
 MAX_REFERRAL_LEVELS = 10
+MAX_CNAME_RECORDS = 10
 
 TYPE_A = 1
 TYPE_NS = 2
+TYPE_CNAME = 5
+TYPE_PTR = 12
+TYPE_MX = 15
 CLASS_IN = 1
 
 RCODE_NOERROR = 0
@@ -97,6 +101,59 @@ def find_requested_answer(message, question):
         ):
             answers.append(record)
     return answers
+
+
+def find_cname_answer(message, expected_name, expected_class):
+    cname_records = []
+
+    for record in message.answers:
+        if (
+            record.rclass == expected_class
+            and record.rtype == TYPE_CNAME
+            and record_name_matches(record.name, expected_name)
+        ):
+            cname_records.append(record)
+    return cname_records
+
+
+def extract_cname_chain_and_final_answers(message, question):
+    current_name = normalize_dns_name(question.qname)
+    visited_names = {current_name}
+    cname_chain = []
+
+    while True:
+        final_answers = []
+        for record in message.answers:
+            if (
+                record.rclass == question.qclass
+                and record.rtype == question.qtype
+                and record_name_matches(record.name, current_name)
+            ):
+                final_answers.append(record)
+
+        if final_answers:
+            return cname_chain, final_answers, current_name
+
+        cname_records = find_cname_answer(message, current_name, question.qclass)
+        if not cname_records:
+            return cname_chain, [], current_name
+
+        # A CNAME owner should point to one canonical target.
+        target_name = normalize_dns_name(cname_records[0].rdata)
+
+        for record in cname_records:
+            if normalize_dns_name(record.rdata) != target_name:
+                raise ValueError("Conflicting CNAME targets")
+        cname_chain.extend(cname_records)
+
+        if len(cname_chain) > MAX_CNAME_RECORDS:
+            raise ResolutionLimitError("CNAME chain limit reached")
+
+        if target_name in visited_names:
+            raise ResolutionLimitError("CNAME loop detected")
+
+        visited_names.add(target_name)
+        current_name = target_name
 
 
 def get_referral_records(message):
