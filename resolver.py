@@ -3,9 +3,41 @@ import sys, socket, time
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions, parse_dns_message
 from dns_encoder import encode_dns_response, encode_upstream_query
+from dns_records import DNSQuestion
 
 UPSTREAM_DNS_PORT = 53
 MAX_DNS_MESSAGE_SIZE = 4096
+
+MAX_OUTBOUND_ATTEMPTS = 50
+MAX_REFERRAL_LEVELS = 10
+
+TYPE_A = 1
+TYPE_NS = 2
+CLASS_IN = 1
+
+RCODE_NOERROR = 0
+RCODE_SERVFAIL = 2
+RCODE_NXDOMAIN = 3
+
+
+class ResolutionLimitError(Exception):
+    pass
+
+
+class ResloutionBudget:
+    def __init__(self):
+        self.outbount_attempts = 0
+        self.referrals_levels = 0
+
+    def use_outbound_attempt(self):
+        if self.outbound_attempts >= MAX_OUTBOUND_ATTEMPTS:
+            raise ResolutionLimitError("Outbound attempts limit reached")
+        self.outbound_attempts += 1
+
+    def use_referral_level(self):
+        if self.referrals_levels >= MAX_REFERRAL_LEVELS:
+            raise ResolutionLimitError("Referral levels limit reached")
+        self.referrals_levels += 1
 
 
 def parse_args():
