@@ -158,6 +158,45 @@ def make_resolution_result(
     }
 
 
+def reslove_name_server_address(ns_records, root_server_ips, timeout, budget):
+    for ns_record in ns_records:
+        budget.use_referral_level()
+
+        ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
+
+        nested_result = iterative_resolve(
+            ns_question,
+            root_server_ips,
+            timeout,
+            budget,
+        )
+
+        if nested_result is None:
+            continue
+
+        if nested_result["rcode"] == RCODE_NOERROR:
+            continue
+
+        addresses = []
+
+        for record in nested_result["answers"]:
+            if (
+                record.rclass == CLASS_IN
+                and record.rtype == TYPE_A
+                and record_name_matches(record, ns_record.rdata)
+            ):
+                addresses.append(record.rdata)
+
+        if addresses:
+            return addresses
+
+    return []
+
+
+def iterative_resolve(question, root_server_ips, timeout, budget):
+    pass
+
+
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
     qname = normalize_dns_name(question.qname)
 
