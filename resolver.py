@@ -24,7 +24,7 @@ class ResolutionLimitError(Exception):
     pass
 
 
-class ResloutionBudget:
+class ResolutionBudget:
     def __init__(self):
         self.outbount_attempts = 0
         self.referrals_levels = 0
@@ -408,7 +408,11 @@ def query_upstream_candidate(server_ips, question, timeout, budget):
     return None
 
 
-def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
+def run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout):
+
+    # Root server IPs are the starting point for iterative resolution.
+    root_server_ips = get_root_server_ips(root_a_records)
+
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
 
@@ -421,15 +425,38 @@ def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
 
             question = questions[0]
 
+            # Answer directly when the query can be resolved from root hints.
             local_response = build_root_hints_response(
                 question, root_ns_records, root_a_records, root_a_map
             )
 
             if local_response is None:
-                response_data = encode_dns_response(
-                    query_header=header,
-                    question=question,
-                )
+                # Each client query gets its own resolution limits.
+                budget = ResolutionBudget()
+                try:
+                    resolution_result = iterative_resolve(
+                        question, root_server_ips, timeout, budget
+                    )
+                except ResolutionLimitError:
+                    resolution_result = None
+
+                # Resolution failure or limit exceeded becomes SERVFAIL.
+                if resolution_result is None:
+                    response_data = encode_dns_response(
+                        query_header=header,
+                        question=question,
+                        rcode=RCODE_SERVFAIL,
+                    )
+                else:
+                    response_data = encode_dns_response(
+                        query_header=header,
+                        question=question,
+                        answers=resolution_result["answers"],
+                        authorities=resolution_result["authorities"],
+                        additional=resolution_result["additional"],
+                        rcode=resolution_result["rcode"],
+                    )
+
             else:
                 response_data = encode_dns_response(
                     query_header=header,
@@ -457,7 +484,7 @@ def main():
     server_socket = create_server_socket(listen_port)
 
     try:
-        run_server(server_socket, root_ns_records, root_a_records, root_a_map)
+        run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout)
     except KeyboardInterrupt:
         pass
     finally:
