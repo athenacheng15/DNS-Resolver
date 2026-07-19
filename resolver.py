@@ -26,7 +26,7 @@ class ResolutionLimitError(Exception):
 
 class ResolutionBudget:
     def __init__(self):
-        self.outbount_attempts = 0
+        self.outbound_attempts = 0
         self.referrals_levels = 0
 
     def use_outbound_attempt(self):
@@ -93,7 +93,7 @@ def find_requested_answer(message, question):
         if (
             record.rclass == question.qclass
             and record.rtype == question.qtype
-            and record_name_matches(record, question.qname)
+            and record_name_matches(record.name, question.qname)
         ):
             answers.append(record)
     return answers
@@ -116,14 +116,14 @@ def get_matching_glue_ips(message, ns_records):
         ns_name = normalize_dns_name(ns_record.rdata)
 
         for additional_record in message.additional:
-            if additional_record.rclass == CLASS_IN:
+            if additional_record.rclass != CLASS_IN:
                 continue
             if additional_record.rtype != TYPE_A:
                 continue
 
             additional_name = normalize_dns_name(additional_record.name)
             if additional_name == ns_name:
-                glue_ips.append(additional_record)
+                glue_ips.append(additional_record.rdata)
 
     return glue_ips
 
@@ -158,10 +158,8 @@ def make_resolution_result(
     }
 
 
-def reslove_name_server_address(ns_records, root_server_ips, timeout, budget):
+def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
     for ns_record in ns_records:
-        budget.use_referral_level()
-
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
 
         nested_result = iterative_resolve(
@@ -174,7 +172,7 @@ def reslove_name_server_address(ns_records, root_server_ips, timeout, budget):
         if nested_result is None:
             continue
 
-        if nested_result["rcode"] == RCODE_NOERROR:
+        if nested_result["rcode"] != RCODE_NOERROR:
             continue
 
         addresses = []
@@ -183,7 +181,7 @@ def reslove_name_server_address(ns_records, root_server_ips, timeout, budget):
             if (
                 record.rclass == CLASS_IN
                 and record.rtype == TYPE_A
-                and record_name_matches(record, ns_record.rdata)
+                and record_name_matches(record.name, ns_record.rdata)
             ):
                 addresses.append(record.rdata)
 
@@ -251,7 +249,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             candidate_ips = glue_ips
         else:
             # Resolve NS hostnames from the root when no glue is available.
-            candidate_ips = reslove_name_server_address(
+            candidate_ips = resolve_name_server_addresses(
                 ns_records, root_server_ips, timeout, budget
             )
 
