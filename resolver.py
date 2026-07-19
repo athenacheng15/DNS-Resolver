@@ -83,6 +83,51 @@ def question_match(actual_question, expected_question):
     )
 
 
+def record_name_matches(actual_name, expected_name):
+    return normalize_dns_name(actual_name) == normalize_dns_name(expected_name)
+
+
+def find_requested_answer(message, question):
+    answers = []
+    for record in message.answers:
+        if (
+            record.rclass == question.qclass
+            and record.rtype == question.qtype
+            and record_name_matches(record, question.qname)
+        ):
+            answers.append(record)
+    return answers
+
+
+def get_referral_records(message):
+    ns_records = []
+    for record in message.authority:
+        if record.rclass == CLASS_IN and record.rtype == TYPE_NS:
+            # The parser stores authority records in the order they appear in the packet.
+            ns_records.append(record)
+
+    return ns_records
+
+
+def get_matching_glue_ips(message, ns_records):
+    # Match glue records only for referred name servers.
+    glue_ips = []
+    for ns_record in ns_records:
+        ns_name = normalize_dns_name(ns_record.rdata)
+
+        for additional_record in message.additional:
+            if additional_record.rclass == CLASS_IN:
+                continue
+            if additional_record.rtype != TYPE_A:
+                continue
+
+            additional_name = normalize_dns_name(additional_record.name)
+            if additional_name == ns_name:
+                glue_ips.append(additional_record)
+
+    return glue_ips
+
+
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
     qname = normalize_dns_name(question.qname)
 
@@ -218,8 +263,10 @@ def query_upstream_server(server_ip, question, timeout):
         upstream_socket.close()
 
 
-def query_upstream_candidate(server_ips, question, timeout):
+def query_upstream_candidate(server_ips, question, timeout, budget):
     for server_ip in server_ips:
+        budget.use_outbound_attempt()
+
         result = query_upstream_server(server_ip, question, timeout)
 
         if result is not None:
