@@ -128,6 +128,36 @@ def get_matching_glue_ips(message, ns_records):
     return glue_ips
 
 
+def is_authoritative_nodata_response(message, question):
+    return (
+        message.header.aa == 1
+        and message.header.rcode == RCODE_NOERROR
+        and not find_requested_answer(message, question)
+    )
+
+
+def is_referral_response(message, question):
+    if message.header.aa == 1:
+        return False
+    if message.header.rcode != RCODE_NOERROR:
+        return False
+    if find_requested_answer(message, question):
+        return False
+
+    return bool(get_referral_records(message))
+
+
+def make_resolution_result(
+    answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR
+):
+    return {
+        "answers": [] if answers is None else answers,
+        "authorities": [] if authorities is None else authorities,
+        "additional": [] if additional is None else additional,
+        "rcode": rcode,
+    }
+
+
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
     qname = normalize_dns_name(question.qname)
 
