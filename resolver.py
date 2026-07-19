@@ -3,9 +3,41 @@ import sys, socket, time
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions, parse_dns_message
 from dns_encoder import encode_dns_response, encode_upstream_query
+from dns_records import DNSQuestion
 
 UPSTREAM_DNS_PORT = 53
 MAX_DNS_MESSAGE_SIZE = 4096
+
+MAX_OUTBOUND_ATTEMPTS = 50
+MAX_REFERRAL_LEVELS = 10
+
+TYPE_A = 1
+TYPE_NS = 2
+CLASS_IN = 1
+
+RCODE_NOERROR = 0
+RCODE_SERVFAIL = 2
+RCODE_NXDOMAIN = 3
+
+
+class ResolutionLimitError(Exception):
+    pass
+
+
+class ResolutionBudget:
+    def __init__(self):
+        self.outbound_attempts = 0
+        self.referrals_levels = 0
+
+    def use_outbound_attempt(self):
+        if self.outbound_attempts >= MAX_OUTBOUND_ATTEMPTS:
+            raise ResolutionLimitError("Outbound attempts limit reached")
+        self.outbound_attempts += 1
+
+    def use_referral_level(self):
+        if self.referrals_levels >= MAX_REFERRAL_LEVELS:
+            raise ResolutionLimitError("Referral levels limit reached")
+        self.referrals_levels += 1
 
 
 def parse_args():
@@ -49,6 +81,182 @@ def question_match(actual_question, expected_question):
         and actual_question.qtype == expected_question.qtype
         and actual_question.qclass == expected_question.qclass
     )
+
+
+def record_name_matches(actual_name, expected_name):
+    return normalize_dns_name(actual_name) == normalize_dns_name(expected_name)
+
+
+def find_requested_answer(message, question):
+    answers = []
+    for record in message.answers:
+        if (
+            record.rclass == question.qclass
+            and record.rtype == question.qtype
+            and record_name_matches(record.name, question.qname)
+        ):
+            answers.append(record)
+    return answers
+
+
+def get_referral_records(message):
+    ns_records = []
+    for record in message.authority:
+        if record.rclass == CLASS_IN and record.rtype == TYPE_NS:
+            # The parser stores authority records in the order they appear in the packet.
+            ns_records.append(record)
+
+    return ns_records
+
+
+def get_matching_glue_ips(message, ns_records):
+    # Match glue records only for referred name servers.
+    glue_ips = []
+    for ns_record in ns_records:
+        ns_name = normalize_dns_name(ns_record.rdata)
+
+        for additional_record in message.additional:
+            if additional_record.rclass != CLASS_IN:
+                continue
+            if additional_record.rtype != TYPE_A:
+                continue
+
+            additional_name = normalize_dns_name(additional_record.name)
+            if additional_name == ns_name:
+                glue_ips.append(additional_record.rdata)
+
+    return glue_ips
+
+
+def is_authoritative_nodata_response(message, question):
+    return (
+        message.header.aa == 1
+        and message.header.rcode == RCODE_NOERROR
+        and not find_requested_answer(message, question)
+    )
+
+
+def is_referral_response(message, question):
+    if message.header.aa == 1:
+        return False
+    if message.header.rcode != RCODE_NOERROR:
+        return False
+    if find_requested_answer(message, question):
+        return False
+
+    return bool(get_referral_records(message))
+
+
+def make_resolution_result(
+    answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR
+):
+    return {
+        "answers": [] if answers is None else answers,
+        "authorities": [] if authorities is None else authorities,
+        "additional": [] if additional is None else additional,
+        "rcode": rcode,
+    }
+
+
+def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
+    for ns_record in ns_records:
+        ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
+
+        nested_result = iterative_resolve(
+            ns_question,
+            root_server_ips,
+            timeout,
+            budget,
+        )
+
+        if nested_result is None:
+            continue
+
+        if nested_result["rcode"] != RCODE_NOERROR:
+            continue
+
+        addresses = []
+
+        for record in nested_result["answers"]:
+            if (
+                record.rclass == CLASS_IN
+                and record.rtype == TYPE_A
+                and record_name_matches(record.name, ns_record.rdata)
+            ):
+                addresses.append(record.rdata)
+
+        if addresses:
+            return addresses
+
+    return []
+
+
+def iterative_resolve(question, root_server_ips, timeout, budget):
+    candidate_ips = list(root_server_ips)
+
+    while candidate_ips:
+        upstream_result = query_upstream_candidate(
+            candidate_ips, question, timeout, budget
+        )
+
+        if upstream_result is None:
+            return None
+
+        message = upstream_result["message"]
+
+        # NXDOMAIN is final only when returned by an authoritative server.
+        if message.header.aa == 1 and message.header.rcode == RCODE_NXDOMAIN:
+            return make_resolution_result(
+                answers=[],
+                authorities=message.authority,
+                additional=[],
+                rcode=RCODE_NXDOMAIN,
+            )
+
+        # Other upstream errors currently fail this resolution.
+        if message.header.rcode != RCODE_NOERROR:
+            return None
+
+        requested_answers = find_requested_answer(message, question)
+
+        # Return immediately if the requested record is found.
+        if requested_answers:
+            return make_resolution_result(
+                answers=requested_answers,
+                authorities=message.authority,
+                additional=message.additional,
+                rcode=RCODE_NOERROR,
+            )
+
+        # Stop if this is an authoritative NODATA response.
+        if is_authoritative_nodata_response(message, question):
+            return make_resolution_result(
+                answers=[],
+                authorities=message.authority,
+                additional=[],
+                rcode=RCODE_NOERROR,
+            )
+
+        if not is_referral_response(message, question):
+            return None
+
+        budget.use_referral_level()
+
+        ns_records = get_referral_records(message)
+
+        glue_ips = get_matching_glue_ips(message, ns_records)
+        if glue_ips:
+            candidate_ips = glue_ips
+        else:
+            # Resolve NS hostnames from the root when no glue is available.
+            candidate_ips = resolve_name_server_addresses(
+                ns_records, root_server_ips, timeout, budget
+            )
+
+        if not candidate_ips:
+            return None
+
+    return None
 
 
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
@@ -186,8 +394,10 @@ def query_upstream_server(server_ip, question, timeout):
         upstream_socket.close()
 
 
-def query_upstream_candidate(server_ips, question, timeout):
+def query_upstream_candidate(server_ips, question, timeout, budget):
     for server_ip in server_ips:
+        budget.use_outbound_attempt()
+
         result = query_upstream_server(server_ip, question, timeout)
 
         if result is not None:
@@ -196,7 +406,11 @@ def query_upstream_candidate(server_ips, question, timeout):
     return None
 
 
-def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
+def run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout):
+
+    # Root server IPs are the starting point for iterative resolution.
+    root_server_ips = get_root_server_ips(root_a_records)
+
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
 
@@ -209,15 +423,38 @@ def run_server(server_socket, root_ns_records, root_a_records, root_a_map):
 
             question = questions[0]
 
+            # Answer directly when the query can be resolved from root hints.
             local_response = build_root_hints_response(
                 question, root_ns_records, root_a_records, root_a_map
             )
 
             if local_response is None:
-                response_data = encode_dns_response(
-                    query_header=header,
-                    question=question,
-                )
+                # Each client query gets its own resolution limits.
+                budget = ResolutionBudget()
+                try:
+                    resolution_result = iterative_resolve(
+                        question, root_server_ips, timeout, budget
+                    )
+                except ResolutionLimitError:
+                    resolution_result = None
+
+                # Resolution failure or limit exceeded becomes SERVFAIL.
+                if resolution_result is None:
+                    response_data = encode_dns_response(
+                        query_header=header,
+                        question=question,
+                        rcode=RCODE_SERVFAIL,
+                    )
+                else:
+                    response_data = encode_dns_response(
+                        query_header=header,
+                        question=question,
+                        answers=resolution_result["answers"],
+                        authorities=resolution_result["authorities"],
+                        additional=resolution_result["additional"],
+                        rcode=resolution_result["rcode"],
+                    )
+
             else:
                 response_data = encode_dns_response(
                     query_header=header,
@@ -245,7 +482,7 @@ def main():
     server_socket = create_server_socket(listen_port)
 
     try:
-        run_server(server_socket, root_ns_records, root_a_records, root_a_map)
+        run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout)
     except KeyboardInterrupt:
         pass
     finally:
