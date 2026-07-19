@@ -194,7 +194,71 @@ def reslove_name_server_address(ns_records, root_server_ips, timeout, budget):
 
 
 def iterative_resolve(question, root_server_ips, timeout, budget):
-    pass
+    candidate_ips = list(root_server_ips)
+
+    while candidate_ips:
+        upstream_result = query_upstream_candidate(
+            candidate_ips, question, timeout, budget
+        )
+
+        if upstream_result is None:
+            return None
+
+        message = upstream_result["message"]
+
+        # NXDOMAIN is final only when returned by an authoritative server.
+        if message.header.aa == 1 and message.header.rcode == RCODE_NXDOMAIN:
+            return make_resolution_result(
+                answers=[],
+                authorities=message.authority,
+                additional=[],
+                rcode=RCODE_NXDOMAIN,
+            )
+
+        # Other upstream errors currently fail this resolution.
+        if message.header.rcode != RCODE_NOERROR:
+            return None
+
+        requested_answers = find_requested_answer(message, question)
+
+        # Return immediately if the requested record is found.
+        if requested_answers:
+            return make_resolution_result(
+                answers=requested_answers,
+                authorities=message.authority,
+                additional=message.additional,
+                rcode=RCODE_NOERROR,
+            )
+
+        # Stop if this is an authoritative NODATA response.
+        if is_authoritative_nodata_response(message, question):
+            return make_resolution_result(
+                answers=[],
+                authorities=message.authority,
+                additional=[],
+                rcode=RCODE_NOERROR,
+            )
+
+        if not is_referral_response(message, question):
+            return None
+
+        budget.use_referral_level()
+
+        ns_records = get_referral_records(message)
+
+        glue_ips = get_matching_glue_ips(message, ns_records)
+        if glue_ips:
+            candidate_ips = glue_ips
+        else:
+            # Resolve NS hostnames from the root when no glue is available.
+            candidate_ips = reslove_name_server_address(
+                ns_records, root_server_ips, timeout, budget
+            )
+
+        if not candidate_ips:
+            return None
+
+    return None
 
 
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
