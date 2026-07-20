@@ -59,39 +59,39 @@ class DNSCache:
 
     def get(self, question):
         """
-        Return unexpired cached records with decreasing TTL values.
+        Return a complete unexpired cached answer with decreasing TTL values.
+
+        The cache entry is treated as one logical answer. If any record has
+        expired, the whole entry is removed and this method returns None.
+
+        This is important for CNAME chains because returning only the final
+        target record without every preceding CNAME link would produce an
+        incomplete answer for the original query.
 
         Returns:
-            A new list of ResourceRecord objects, or None when the key is not
-            cached or every record in the entry has expired.
+            A new list of ResourceRecord objects, or None when the entry is
+            missing or no longer complete.
         """
         key = make_cache_key(question)
         now = time.monotonic()
+
         with self._lock:
             cached_records = self._entries.get(key)
 
             if cached_records is None:
                 return None
 
-            live_cached_records = []
             result_records = []
 
             for record, expiry_time in cached_records:
                 remaining_ttl = int(expiry_time - now)
 
                 if remaining_ttl <= 0:
-                    continue
+                    del self._entries[key]
+                    return None
 
-                live_cached_records.append((record, expiry_time))
                 result_records.append(clone_record_with_ttl(record, remaining_ttl))
 
-            if not live_cached_records:
-                del self._entries[key]
-                return None
-
-            # Remove individually expired records while preserving the order
-            # of the remaining CNAME chain and final answers.
-            self._entries[key] = live_cached_records
             return result_records
 
     def clear(self):
