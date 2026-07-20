@@ -1,4 +1,4 @@
-import sys, socket, time
+import sys, socket, time, threading
 
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions, parse_dns_message
@@ -644,72 +644,110 @@ def resolve_client_question(question, root_server_ips, timeout, cache):
     return resolution_result
 
 
+def build_client_response(query_header, question, resolution_result):
+    """
+    Encode the final DNS response sent to the client.
+
+    A failed resolution is returned as SERVFAIL. Otherwise, the answer,
+    authority, additional, and RCODE fields come from the resolution result.
+    """
+
+    if resolution_result is None:
+        return encode_dns_response(
+            query_header=query_header,
+            question=question,
+            rcode=RCODE_SERVFAIL,
+        )
+
+    return encode_dns_response(
+        query_header=query_header,
+        question=question,
+        answers=resolution_result["answers"],
+        authorities=resolution_result["authorities"],
+        additional=resolution_result["additional"],
+        rcode=resolution_result["rcode"],
+    )
+
+
+def handle_client_query(
+    server_socket,
+    query_data,
+    client_address,
+    root_ns_records,
+    root_a_records,
+    root_a_map,
+    root_server_ips,
+    timeout,
+    cache,
+):
+    """
+    Process and answer one client DNS query.
+
+    This function runs inside a worker thread. All state created while
+    resolving the query is local to this invocation. The cache is the only
+    shared mutable resolver state and is protected internally by a lock.
+    """
+    try:
+        header, questions = decode_client_query(query_data)
+
+        # This resolver supports exactly one question per client query.
+        if len(questions) != 1:
+            return
+
+        question = questions[0]
+
+        # Root-hints queries can be answered locally without contacting upstream DNS servers.
+        resolution_result = build_root_hints_response(
+            question, root_ns_records, root_a_records, root_a_map
+        )
+
+        if resolution_result is None:
+            resolution_result = resolve_client_question(
+                question, root_server_ips, timeout, cache
+            )
+
+        response_data = build_client_response(header, question, resolution_result)
+
+        server_socket.sendto(response_data, client_address)
+
+    except (ValueError, OSError):
+        # Malformed client messages and per-query socket failures must not
+        # terminate the main resolver process or affect other worker threads.
+        return
+
+
 def run_server(
     server_socket, root_ns_records, root_a_records, root_a_map, timeout, cache
 ):
     """
-    Receive DNS client queries and send resolver responses.
+    Receive client DNS queries and dispatch each query to a worker thread.
 
-    The server currently processes received queries in the main loop.
-    Concurrency will be added in the next step. The cache object is already
-    shared explicitly so it can later be safely used by worker threads.
+    The main thread returns immediately to recvfrom(), allowing multiple
+    client resolutions to overlap while workers wait for upstream replies.
     """
 
     # Root server IPs are the starting point for iterative resolution.
     root_server_ips = get_root_server_ips(root_a_records)
-    print("Root server IPs:", root_server_ips)
 
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
 
-        try:
-            header, questions = decode_client_query(query_data)
-
-            if len(questions) == 0:
-                print("Invalid query: no questions")
-                continue
-
-            question = questions[0]
-
-            # Answer directly when the query can be resolved from root hints.
-            local_response = build_root_hints_response(
-                question, root_ns_records, root_a_records, root_a_map
-            )
-
-            if local_response is not None:
-                resolution_result = local_response
-            else:
-                resolution_result = resolve_client_question(
-                    question, root_server_ips, timeout, cache
-                )
-
-            # Resolution failure or limit exceeded becomes SERVFAIL.
-            if resolution_result is None:
-                response_data = encode_dns_response(
-                    query_header=header,
-                    question=question,
-                    rcode=RCODE_SERVFAIL,
-                )
-
-            else:
-                response_data = encode_dns_response(
-                    query_header=header,
-                    question=question,
-                    answers=local_response["answers"],
-                    authorities=local_response["authorities"],
-                    additional=local_response["additional"],
-                    rcode=local_response["rcode"],
-                )
-
-            server_socket.sendto(
-                response_data,
+        worker = threading.Thread(
+            target=handle_client_query,
+            args=(
+                server_socket,
+                query_data,
                 client_address,
-            )
-
-        except ValueError:
-            # Assessed Stage 2 client queries are valid DNS messages.
-            # Malformed queries are ignored safely.
-            continue
+                root_ns_records,
+                root_a_records,
+                root_a_map,
+                root_server_ips,
+                timeout,
+                cache,
+            ),
+            daemon=True,
+        )
+        worker.start()
 
 
 def main():
