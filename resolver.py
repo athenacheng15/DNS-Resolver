@@ -2,14 +2,19 @@ import sys, socket, time, threading
 
 from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions, parse_dns_message
-from dns_encoder import encode_dns_response, encode_upstream_query
+from dns_encoder import (
+    encode_dns_response,
+    encode_dns_response_compressed,
+    encode_upstream_query,
+)
 from dns_records import DNSQuestion
 from cache import DNSCache
 
 from utils import normalize_name
 
 UPSTREAM_DNS_PORT = 53
-MAX_DNS_MESSAGE_SIZE = 4096
+MAX_RECEIVED_DNS_MESSAGE_SIZE = 4096
+MAX_CLIENT_DNS_RESPONSE_SIZE = 512
 
 MAX_OUTBOUND_ATTEMPTS = 50
 MAX_REFERRAL_LEVELS = 10
@@ -140,6 +145,25 @@ def question_match(actual_question, expected_question):
 
 def record_name_matches(actual_name, expected_name):
     return normalize_name(actual_name) == normalize_name(expected_name)
+
+
+def name_is_within_zone(name, zone):
+    name = normalize_name(name)
+    zone = normalize_name(zone)
+
+    if zone == ".":
+        return True
+
+    return name == zone or name.endswith("." + zone)
+
+
+def zone_label_count(zone):
+    zone = normalize_name(zone)
+
+    if zone == ".":
+        return 0
+
+    return len(zone.rstrip(".").split("."))
 
 
 def find_requested_answer(message, question):
@@ -283,14 +307,35 @@ def has_complete_positive_answer(question, records):
         current_name = target_name
 
 
-def get_referral_records(message):
-    ns_records = []
-    for record in message.authority:
-        if record.rclass == CLASS_IN and record.rtype == TYPE_NS:
-            # The parser stores authority records in the order they appear in the packet.
-            ns_records.append(record)
+def get_referral_records(message, question):
+    matching_records = []
+    most_specific_label_count = -1
 
-    return ns_records
+    for record in message.authority:
+        if record.rclass != CLASS_IN:
+            continue
+
+        if record.rtype != TYPE_NS:
+            continue
+
+        delegated_zone = normalize_name(record.name)
+
+        if not name_is_within_zone(
+            question.qname,
+            delegated_zone,
+        ):
+            continue
+
+        label_count = zone_label_count(delegated_zone)
+
+        if label_count > most_specific_label_count:
+            matching_records = [record]
+            most_specific_label_count = label_count
+
+        elif label_count == most_specific_label_count:
+            matching_records.append(record)
+
+    return matching_records
 
 
 def get_matching_glue_ips(message, ns_records):
@@ -328,7 +373,7 @@ def is_referral_response(message, question):
     if find_requested_answer(message, question):
         return False
 
-    return bool(get_referral_records(message))
+    return bool(get_referral_records(message, question))
 
 
 def filter_encodable_records(records):
@@ -356,6 +401,10 @@ def make_resolution_result(
 def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
     for ns_record in ns_records:
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
+
+        # Starting a no-glue nested NS hostname lookup consumes
+        # one referral level from the shared resolution budget.
+        budget.use_referral_level()
 
         nested_result = iterative_resolve(
             ns_question,
@@ -521,7 +570,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         budget.use_referral_level()
         response_was_assembled = True
 
-        ns_records = get_referral_records(message)
+        ns_records = get_referral_records(message, current_question)
         glue_ips = get_matching_glue_ips(message, ns_records)
 
         if glue_ips:
@@ -586,8 +635,19 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     return None
 
 
-def get_root_server_ips(root_a_records):
-    return [record.rdata for record in root_a_records if record.rtype == 1]
+def get_root_server_ips(root_ns_records, root_a_records):
+    root_server_ips = []
+
+    for ns_record in root_ns_records:
+        ns_name = normalize_name(ns_record.rdata)
+
+        for a_record in root_a_records:
+            a_name = normalize_name(a_record.name)
+
+            if a_name == ns_name:
+                root_server_ips.append(a_record.rdata)
+
+    return root_server_ips
 
 
 def is_retryable_upstream_response(message):
@@ -683,7 +743,7 @@ def query_upstream_server(server_ip, question, timeout, budget):
 
             try:
                 response_data, response_address = upstream_socket.recvfrom(
-                    MAX_DNS_MESSAGE_SIZE
+                    MAX_RECEIVED_DNS_MESSAGE_SIZE
                 )
             except socket.timeout:
                 return None
@@ -768,6 +828,66 @@ def resolve_client_question(question, root_server_ips, timeout, cache):
     return resolution_result
 
 
+def encode_client_response_safely(
+    query_header,
+    question,
+    answers=None,
+    authorities=None,
+    additional=None,
+    rcode=RCODE_NOERROR,
+    aa=0,
+):
+    try:
+        response = encode_dns_response(
+            query_header,
+            question,
+            answers,
+            authorities,
+            additional,
+            rcode,
+            aa,
+        )
+    except ValueError:
+        response = None
+
+    if response is not None and len(response) <= MAX_CLIENT_DNS_RESPONSE_SIZE:
+        return response
+
+    try:
+        compressed_response = encode_dns_response_compressed(
+            query_header,
+            question,
+            answers,
+            authorities,
+            additional,
+            rcode,
+            aa,
+        )
+    except ValueError:
+        compressed_response = None
+
+    if (
+        compressed_response is not None
+        and len(compressed_response) <= MAX_CLIENT_DNS_RESPONSE_SIZE
+    ):
+        return compressed_response
+
+    servfail_response = encode_dns_response(
+        query_header=query_header,
+        question=question,
+        answers=[],
+        authorities=[],
+        additional=[],
+        rcode=RCODE_SERVFAIL,
+        aa=0,
+    )
+
+    if len(servfail_response) > MAX_CLIENT_DNS_RESPONSE_SIZE:
+        raise ValueError("SERVFAIL response exceeds client UDP size limit")
+
+    return servfail_response
+
+
 def build_client_response(query_header, question, resolution_result):
     """
     Encode the final DNS response sent to the client.
@@ -777,23 +897,25 @@ def build_client_response(query_header, question, resolution_result):
     """
 
     if resolution_result is None:
-        return encode_dns_response(
+        return encode_client_response_safely(
             query_header=query_header,
             question=question,
             rcode=RCODE_SERVFAIL,
+            aa=0,
         )
+
     answers = filter_encodable_records(resolution_result["answers"])
     authorities = filter_encodable_records(resolution_result["authorities"])
     additional = filter_encodable_records(resolution_result["additional"])
 
-    return encode_dns_response(
-        query_header=query_header,
-        question=question,
-        answers=answers,
-        authorities=authorities,
-        additional=additional,
-        rcode=resolution_result["rcode"],
-        aa=resolution_result["aa"],
+    return encode_client_response_safely(
+        query_header,
+        question,
+        answers,
+        authorities,
+        additional,
+        resolution_result["rcode"],
+        resolution_result["aa"],
     )
 
 
@@ -864,10 +986,12 @@ def run_server(
     """
 
     # Root server IPs are the starting point for iterative resolution.
-    root_server_ips = get_root_server_ips(root_a_records)
+    root_server_ips = get_root_server_ips(root_ns_records, root_a_records)
 
     while True:
-        query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
+        query_data, client_address = server_socket.recvfrom(
+            MAX_RECEIVED_DNS_MESSAGE_SIZE
+        )
 
         worker = threading.Thread(
             target=handle_client_query,

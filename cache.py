@@ -35,27 +35,34 @@ class DNSCache:
 
     def put(self, question, records):
         """
-        Cache positive answer records for a DNS question.
+        Cache one complete positive answer for a DNS question.
 
-        Records with TTL <= 0 are ignored. If no usable records remain, any
-        existing entry for the key is removed.
+        All records are treated as one logical response. If records is empty,
+        or if any required record has TTL <= 0, no partial entry is stored and
+        any existing entry for the key is removed.
         """
         key = make_cache_key(question)
+
+        if not records:
+            with self._lock:
+                self._entries.pop(key, None)
+            return
+
+        for record in records:
+            if record.ttl <= 0:
+                with self._lock:
+                    self._entries.pop(key, None)
+                return
+
         now = time.monotonic()
         cached_records = []
 
         for record in records:
-            if record.ttl <= 0:
-                continue
-
             expiry_time = now + record.ttl
             cached_records.append((record, expiry_time))
 
         with self._lock:
-            if cached_records:
-                self._entries[key] = cached_records
-            else:
-                self._entries.pop(key, None)
+            self._entries[key] = cached_records
 
     def get(self, question):
         """

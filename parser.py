@@ -1,23 +1,63 @@
 import sys
 from dns_message import parse_header, parse_questions, parse_resource_records
-from dns_records import RCODE_MAP,  TYPE_MAP, CLASS_MAP
+from dns_records import RCODE_MAP, TYPE_MAP, CLASS_MAP
+
+
+def format_type(type_number):
+    return TYPE_MAP.get(type_number, f"TYPE{type_number}")
+
+
+def format_class(class_number):
+    return CLASS_MAP.get(class_number, f"CLASS{class_number}")
+
 
 def print_records(title, records):
-    print(f"{title}")
+    print(title)
 
     if len(records) == 0:
         print("No records\n")
         return
 
     for record in records:
-        print(f"{record.name} {record.ttl} {CLASS_MAP.get(record.rclass, 'UNKNOWN')} {TYPE_MAP.get(record.rtype, 'UNKNOWN')} {record.rdata}")
+        rclass = format_class(record.rclass)
+        rtype = format_type(record.rtype)
+
+        if isinstance(record.rdata, dict):
+            status = record.rdata.get("status")
+
+            if status in ("unsupported", "malformed"):
+                print(
+                    f"{record.name} {record.ttl} "
+                    f"{rclass} {rtype} "
+                    f"RDLENGTH {record.rdlength}"
+                )
+                continue
+
+            # MX record
+            if "preference" in record.rdata and "exchange" in record.rdata:
+                preference = record.rdata["preference"]
+                exchange = record.rdata["exchange"]
+
+                print(
+                    f"{record.name} {record.ttl} "
+                    f"{rclass} {rtype} "
+                    f"{preference} {exchange}"
+                )
+                continue
+
+        print(f"{record.name} {record.ttl} " f"{rclass} {rtype} {record.rdata}")
+
     print()
 
 
 def print_questions(questions):
     print("--- QUESTIONS ---")
     for question in questions:
-        print(f"{question.qname} {CLASS_MAP.get(question.qclass, 'UNKNOWN')} {TYPE_MAP.get(question.qtype, 'UNKNOWN')}")
+        qclass = format_class(question.qclass)
+        qtype = format_type(question.qtype)
+
+        print(f"{question.qname} {qclass} {qtype}")
+
     print()
 
 
@@ -44,31 +84,45 @@ def print_flags(header):
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python3 parser.py <dns-message-file>")
-        sys.exit(1)
-    
+        print(
+            "Usage: python3 parser.py <dns-message-file>",
+            file=sys.stderr,
+        )
+        return 1
+
     filename = sys.argv[1]
 
-    with open(filename, 'rb') as file: # r:read, b:binary
-        data = file.read()
+    try:
+        with open(filename, "rb") as file:  # r:read, b:binary
+            data = file.read()
+    except OSError as error:
+        print(f"Error reading file {filename}: {error}", file=sys.stderr)
+        return 1
 
-    header, offset = parse_header(data)
-    questions, offset = parse_questions(data, offset, header.qdcount)
-    answers, offset = parse_resource_records(data, offset, header.ancount)
-    authorities, offset = parse_resource_records(data, offset, header.nscount)
-    additional, offset = parse_resource_records(data, offset, header.arcount)
+    try:
+        header, offset = parse_header(data)
+        questions, offset = parse_questions(data, offset, header.qdcount)
+        answers, offset = parse_resource_records(data, offset, header.ancount)
+        authorities, offset = parse_resource_records(data, offset, header.nscount)
+        additional, offset = parse_resource_records(data, offset, header.arcount)
+
+        if offset != len(data):
+            raise ValueError("Unexpected trailing data in DNS message")
+
+    except (ValueError, UnicodeError) as error:
+        print(f"Error parsing DNS message: {error}", file=sys.stderr)
+        return 1
 
     print(f"ID : {header.message_id}")
     print_flags(header)
     print_counts(header)
     print_questions(questions)
     print_records("--- ANSWERS ---", answers)
-    print_records("--- AUTHORITIES ---", authorities)
+    print_records("--- AUTHORITY ---", authorities)
     print_records("--- ADDITIONAL ---", additional)
 
-    # For debugging:
-    # print(f"Next offset: {offset}")
-    # print(f"File size: {len(data)} bytes")
-    
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
