@@ -147,6 +147,25 @@ def record_name_matches(actual_name, expected_name):
     return normalize_name(actual_name) == normalize_name(expected_name)
 
 
+def name_is_within_zone(name, zone):
+    name = normalize_name(name)
+    zone = normalize_name(zone)
+
+    if zone == ".":
+        return True
+
+    return name == zone or name.endswith("." + zone)
+
+
+def zone_label_count(zone):
+    zone = normalize_name(zone)
+
+    if zone == ".":
+        return 0
+
+    return len(zone.rstrip(".").split("."))
+
+
 def find_requested_answer(message, question):
     answers = []
     for record in message.answers:
@@ -288,14 +307,35 @@ def has_complete_positive_answer(question, records):
         current_name = target_name
 
 
-def get_referral_records(message):
-    ns_records = []
-    for record in message.authority:
-        if record.rclass == CLASS_IN and record.rtype == TYPE_NS:
-            # The parser stores authority records in the order they appear in the packet.
-            ns_records.append(record)
+def get_referral_records(message, question):
+    matching_records = []
+    most_specific_label_count = -1
 
-    return ns_records
+    for record in message.authority:
+        if record.rclass != CLASS_IN:
+            continue
+
+        if record.rtype != TYPE_NS:
+            continue
+
+        delegated_zone = normalize_name(record.name)
+
+        if not name_is_within_zone(
+            question.qname,
+            delegated_zone,
+        ):
+            continue
+
+        label_count = zone_label_count(delegated_zone)
+
+        if label_count > most_specific_label_count:
+            matching_records = [record]
+            most_specific_label_count = label_count
+
+        elif label_count == most_specific_label_count:
+            matching_records.append(record)
+
+    return matching_records
 
 
 def get_matching_glue_ips(message, ns_records):
@@ -333,7 +373,7 @@ def is_referral_response(message, question):
     if find_requested_answer(message, question):
         return False
 
-    return bool(get_referral_records(message))
+    return bool(get_referral_records(message, question))
 
 
 def filter_encodable_records(records):
@@ -530,7 +570,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         budget.use_referral_level()
         response_was_assembled = True
 
-        ns_records = get_referral_records(message)
+        ns_records = get_referral_records(message, current_question)
         glue_ips = get_matching_glue_ips(message, ns_records)
 
         if glue_ips:
