@@ -590,16 +590,29 @@ def validate_upstream_response(
     return message
 
 
-def query_upstream_server(server_ip, question, timeout):
+def query_upstream_server(server_ip, question, timeout, budget):
+    """
+    Send one DNS query to one upstream server.
+
+    The function waits no longer than both:
+    - the configured timeout for one upstream attempt, and
+    - the remaining wall-clock budget for the complete client resolution.
+
+    Invalid or unrelated UDP datagrams are ignored while the same attempt
+    deadline remains active.
+    """
+    budget.ensure_time_remaining()
     transaction_id, query_data = encode_upstream_query(question)
 
     upstream_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    deadline = time.monotonic() + timeout
+
+    now = time.monotonic()
+    attempt_deadline = min(now + timeout, budget.deadline)
 
     try:
         upstream_socket.sendto(query_data, (server_ip, UPSTREAM_DNS_PORT))
         while True:
-            remaining_time = deadline - time.monotonic()
+            remaining_time = attempt_deadline - time.monotonic()
             if remaining_time <= 0:
                 return None
 
@@ -629,10 +642,16 @@ def query_upstream_server(server_ip, question, timeout):
 
 
 def query_upstream_candidate(server_ips, question, timeout, budget):
+    """
+    Query candidate upstream servers sequentially.
+
+    Each attempted server consumes one outbound-attempt unit. All attempts
+    share the same per-client resolution budget.
+    """
     for server_ip in server_ips:
         budget.use_outbound_attempt()
 
-        result = query_upstream_server(server_ip, question, timeout)
+        result = query_upstream_server(server_ip, question, timeout, budget)
 
         if result is not None:
             return result
