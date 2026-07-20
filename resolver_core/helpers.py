@@ -3,6 +3,7 @@ from resolver_core.constants import (
     ENCODABLE_RECORD_TYPES,
     MAX_CNAME_RECORDS,
     RCODE_NOERROR,
+    SUPPORTED_QUERY_TYPES,
     TYPE_A,
     TYPE_CNAME,
     TYPE_NS,
@@ -14,6 +15,7 @@ from utils import normalize_name
 def is_supported_client_question(question):
     return question.qtype in SUPPORTED_QUERY_TYPES
 
+
 def question_match(actual_question, expected_question):
     return (
         normalize_name(actual_question.qname) == normalize_name(expected_question.qname)
@@ -21,8 +23,10 @@ def question_match(actual_question, expected_question):
         and actual_question.qclass == expected_question.qclass
     )
 
+
 def record_name_matches(actual_name, expected_name):
     return normalize_name(actual_name) == normalize_name(expected_name)
+
 
 def name_is_within_zone(name, zone):
     name = normalize_name(name)
@@ -33,6 +37,7 @@ def name_is_within_zone(name, zone):
 
     return name == zone or name.endswith("." + zone)
 
+
 def zone_label_count(zone):
     zone = normalize_name(zone)
 
@@ -40,6 +45,7 @@ def zone_label_count(zone):
         return 0
 
     return len(zone.rstrip(".").split("."))
+
 
 def find_requested_answer(message, question):
     answers = []
@@ -52,6 +58,7 @@ def find_requested_answer(message, question):
             answers.append(record)
     return answers
 
+
 def find_cname_answer(message, expected_name, expected_class):
     cname_records = []
 
@@ -63,6 +70,7 @@ def find_cname_answer(message, expected_name, expected_class):
         ):
             cname_records.append(record)
     return cname_records
+
 
 def extract_cname_chain_and_final_answers(message, question):
     original_name = normalize_name(question.qname)
@@ -110,6 +118,7 @@ def extract_cname_chain_and_final_answers(message, question):
         cname_chain.extend(cname_records)
         visited_names.add(target_name)
         current_name = target_name
+
 
 def has_complete_positive_answer(question, records):
     """
@@ -178,6 +187,7 @@ def has_complete_positive_answer(question, records):
         visited_names.add(target_name)
         current_name = target_name
 
+
 def get_complete_a_addresses(original_name, records):
     """
     Follow a complete CNAME chain starting at original_name and return
@@ -241,6 +251,7 @@ def get_complete_a_addresses(original_name, records):
         visited_names.add(target_name)
         current_name = target_name
 
+
 def get_referral_records(message, question):
     matching_records = []
     most_specific_label_count = -1
@@ -271,6 +282,7 @@ def get_referral_records(message, question):
 
     return matching_records
 
+
 def get_matching_glue_ips(message, ns_records):
     # Match glue records only for referred name servers.
     glue_ips = []
@@ -289,12 +301,14 @@ def get_matching_glue_ips(message, ns_records):
 
     return glue_ips
 
+
 def is_authoritative_nodata_response(message, question):
     return (
         message.header.aa == 1
         and message.header.rcode == RCODE_NOERROR
         and not find_requested_answer(message, question)
     )
+
 
 def is_referral_response(message, question):
     if message.header.aa == 1:
@@ -306,6 +320,7 @@ def is_referral_response(message, question):
 
     return bool(get_referral_records(message, question))
 
+
 def filter_encodable_records(records):
     """
     Keep only resource records that the response encoder can safely encode.
@@ -314,6 +329,7 @@ def filter_encodable_records(records):
     TXT, and OPT are excluded from client-facing responses.
     """
     return [record for record in records if record.rtype in ENCODABLE_RECORD_TYPES]
+
 
 def make_resolution_result(
     answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR, aa=0
@@ -325,6 +341,7 @@ def make_resolution_result(
         "rcode": rcode,
         "aa": aa,
     }
+
 
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
     qname = normalize_name(question.qname)
@@ -371,6 +388,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
 
     # This query cannot be answered using named.root.
     return None
+
 
 def get_root_server_ips(root_ns_records, root_a_records):
     root_server_ips = []
