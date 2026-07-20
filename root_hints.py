@@ -1,4 +1,4 @@
-from dns_records import ResourceRecord
+from dns.records import ResourceRecord
 
 TYPE_NAME_TO_NUM = {
     "A": 1,

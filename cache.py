@@ -1,7 +1,7 @@
 import threading
 import time
 
-from dns_records import ResourceRecord
+from dns.records import ResourceRecord
 from utils import normalize_name
 
 

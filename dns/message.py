@@ -1,5 +1,5 @@
 from cProfile import label
-from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
+from dns.records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
 
 
 # Ensure that there are enough bytes remaining to read.

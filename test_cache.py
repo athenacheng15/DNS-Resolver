@@ -2,7 +2,7 @@ import time
 import unittest
 
 from cache import DNSCache, make_cache_key
-from dns_records import DNSQuestion, ResourceRecord
+from dns.records import DNSQuestion, ResourceRecord
 
 
 class DNSCacheTests(unittest.TestCase):
