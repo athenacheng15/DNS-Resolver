@@ -604,10 +604,60 @@ def query_upstream_candidate(server_ips, question, timeout, budget):
     return None
 
 
-def run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout):
+def resolve_client_question(question, root_server_ips, timeout, cache):
+    """
+    Resolve one client question using the shared positive-answer cache.
+
+    A complete unexpired cached answer is returned without sending any
+    upstream DNS packets. On a cache miss, iterative resolution is used.
+
+    Only complete positive NOERROR answers are inserted into the cache.
+    NXDOMAIN, NODATA, SERVFAIL, and incomplete CNAME chains are not cached.
+    """
+
+    cache_answer = cache.get(question)
+    if cache_answer is not None:
+        return make_resolution_result(
+            answers=cache_answer,
+            authorities=[],
+            additional=[],
+            rcode=RCODE_NOERROR,
+        )
+
+    budget = ResolutionBudget()
+    try:
+        resolution_result = iterative_resolve(
+            question, root_server_ips, timeout, budget
+        )
+    except (ResolutionLimitError, ValueError):
+        return None
+
+    if resolution_result is None:
+        return None
+
+    if resolution_result["rcode"] == RCODE_NOERROR and has_complete_positive_answer(
+        question, resolution_result["answers"]
+    ):
+        cache.put(question, resolution_result["answers"])
+        return resolution_result
+
+    return resolution_result
+
+
+def run_server(
+    server_socket, root_ns_records, root_a_records, root_a_map, timeout, cache
+):
+    """
+    Receive DNS client queries and send resolver responses.
+
+    The server currently processes received queries in the main loop.
+    Concurrency will be added in the next step. The cache object is already
+    shared explicitly so it can later be safely used by worker threads.
+    """
 
     # Root server IPs are the starting point for iterative resolution.
     root_server_ips = get_root_server_ips(root_a_records)
+    print("Root server IPs:", root_server_ips)
 
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
@@ -626,32 +676,20 @@ def run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeo
                 question, root_ns_records, root_a_records, root_a_map
             )
 
-            if local_response is None:
-                # Each client query gets its own resolution limits.
-                budget = ResolutionBudget()
-                try:
-                    resolution_result = iterative_resolve(
-                        question, root_server_ips, timeout, budget
-                    )
-                except ResolutionLimitError:
-                    resolution_result = None
+            if local_response is not None:
+                resolution_result = local_response
+            else:
+                resolution_result = resolve_client_question(
+                    question, root_server_ips, timeout, cache
+                )
 
-                # Resolution failure or limit exceeded becomes SERVFAIL.
-                if resolution_result is None:
-                    response_data = encode_dns_response(
-                        query_header=header,
-                        question=question,
-                        rcode=RCODE_SERVFAIL,
-                    )
-                else:
-                    response_data = encode_dns_response(
-                        query_header=header,
-                        question=question,
-                        answers=resolution_result["answers"],
-                        authorities=resolution_result["authorities"],
-                        additional=resolution_result["additional"],
-                        rcode=resolution_result["rcode"],
-                    )
+            # Resolution failure or limit exceeded becomes SERVFAIL.
+            if resolution_result is None:
+                response_data = encode_dns_response(
+                    query_header=header,
+                    question=question,
+                    rcode=RCODE_SERVFAIL,
+                )
 
             else:
                 response_data = encode_dns_response(
@@ -678,9 +716,12 @@ def main():
     root_hints_file, timeout, listen_port = parse_args()
     root_ns_records, root_a_records, root_a_map = parse_root_hints(root_hints_file)
     server_socket = create_server_socket(listen_port)
+    cache = DNSCache()
 
     try:
-        run_server(server_socket, root_ns_records, root_a_records, root_a_map, timeout)
+        run_server(
+            server_socket, root_ns_records, root_a_records, root_a_map, timeout, cache
+        )
     except KeyboardInterrupt:
         pass
     finally:
