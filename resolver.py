@@ -187,7 +187,7 @@ def extract_cname_chain_and_final_answers(message, question):
         if target_name in visited_names:
             raise ResolutionLimitError("CNAME loop detected")
 
-        cname_chain.append(cname_records)
+        cname_chain.extend(cname_records)
         visited_names.add(target_name)
         current_name = target_name
 
