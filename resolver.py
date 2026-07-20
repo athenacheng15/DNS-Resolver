@@ -257,11 +257,21 @@ def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
 
 
 def iterative_resolve(question, root_server_ips, timeout, budget):
+
+    current_question = DNSQuestion(
+        qname=normalize_dns_name(question.qname),
+        qtype=question.qtype,
+        qclass=question.qclass,
+    )
+
     candidate_ips = list(root_server_ips)
+
+    cname_chain = []
+    visited_cname_names = {normalize_dns_name(question.qname)}
 
     while candidate_ips:
         upstream_result = query_upstream_candidate(
-            candidate_ips, question, timeout, budget
+            candidate_ips, current_question, timeout, budget
         )
 
         if upstream_result is None:
@@ -272,7 +282,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         # NXDOMAIN is final only when returned by an authoritative server.
         if message.header.aa == 1 and message.header.rcode == RCODE_NXDOMAIN:
             return make_resolution_result(
-                answers=[],
+                answers=list(cname_chain),
                 authorities=message.authority,
                 additional=[],
                 rcode=RCODE_NXDOMAIN,
@@ -282,34 +292,94 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         if message.header.rcode != RCODE_NOERROR:
             return None
 
-        requested_answers = find_requested_answer(message, question)
+        response_cnames, final_answers, terminal_name = (
+            extract_cname_chain_and_final_answers(message, current_question)
+        )
 
-        # Return immediately if the requested record is found.
-        if requested_answers:
+        # Direct CNAME query:
+        # extract_cname_chain_and_final_answers() returns the requested
+        # CNAME RRset as final_answers and does not chase its target.
+        if current_question.qtype == TYPE_CNAME:
+            if final_answers:
+                return make_resolution_result(
+                    answers=final_answers,
+                    authorities=message.authority,
+                    additional=message.additional,
+                    rcode=RCODE_NOERROR,
+                )
+
+            # Stop if this is an authoritative NODATA response.
+            if is_authoritative_nodata_response(message, current_question):
+                return make_resolution_result(
+                    answers=[],
+                    authorities=message.authority,
+                    additional=[],
+                    rcode=RCODE_NOERROR,
+                )
+
+        # For A, NS, MX, and PTR queries, process any CNAME records found
+        # in this response before checking for authoritative NODATA.
+        if response_cnames:
+            if len(cname_chain) + len(response_cnames) > MAX_CNAME_RECORDS:
+                raise ResolutionLimitError("CNAME chain limit reached")
+
+            expected_owner = normalize_dns_name(current_question.qname)
+
+            for cname_record in response_cnames:
+                owner_name = normalize_dns_name(cname_record.name)
+                target_name = normalize_dns_name(cname_record.rdata)
+
+                # The extracted chain should continue from the current name.
+                if owner_name != expected_owner:
+                    raise ValueError("CNAME chain owner does not match expected name")
+
+                if target_name in visited_cname_names:
+                    raise ResolutionLimitError("CNAME loop detected")
+
+                cname_chain.append(cname_record)
+                visited_cname_names.add(target_name)
+                expected_owner = target_name
+
+        # The same response may already contain the complete CNAME chain
+        # followed by the requested-type RRset.
+        if final_answers:
             return make_resolution_result(
-                answers=requested_answers,
+                answers=cname_chain + final_answers,
                 authorities=message.authority,
                 additional=message.additional,
                 rcode=RCODE_NOERROR,
             )
 
-        # Stop if this is an authoritative NODATA response.
-        if is_authoritative_nodata_response(message, question):
+        # A CNAME chain was found, but this response did not contain the
+        # final requested-type RRset. Restart iterative resolution from
+        # the root for the canonical target, preserving the original type.
+        if response_cnames:
+            current_question = DNSQuestion(
+                qname=terminal_name,
+                qtype=question.qtype,
+                qclass=question.qclass,
+            )
+            candidate_ips = list(root_server_ips)
+            continue
+
+        # No requested answer and no CNAME remain. If the response is
+        # authoritative, this is terminal NODATA rather than a referral.
+        if is_authoritative_nodata_response(message, current_question):
             return make_resolution_result(
-                answers=[],
+                answers=list(cname_chain),
                 authorities=message.authority,
                 additional=[],
                 rcode=RCODE_NOERROR,
             )
 
-        if not is_referral_response(message, question):
+        if not is_referral_response(message, current_question):
             return None
 
         budget.use_referral_level()
 
         ns_records = get_referral_records(message)
-
         glue_ips = get_matching_glue_ips(message, ns_records)
+
         if glue_ips:
             candidate_ips = glue_ips
         else:
