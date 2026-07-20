@@ -4,6 +4,7 @@ from root_hints import parse_root_hints
 from dns_message import parse_header, parse_questions, parse_dns_message
 from dns_encoder import encode_dns_response, encode_upstream_query
 from dns_records import DNSQuestion
+from cache import DNSCache
 
 from utils import normalize_name
 
@@ -154,6 +155,74 @@ def extract_cname_chain_and_final_answers(message, question):
             raise ResolutionLimitError("CNAME loop detected")
 
         cname_chain.append(cname_records)
+        visited_names.add(target_name)
+        current_name = target_name
+
+
+def has_complete_positive_answer(question, records):
+    """
+    Return True when records form a complete positive answer for question.
+
+    For a direct CNAME query, the answer must contain a CNAME RRset whose
+    owner is the original QNAME.
+
+    For A, NS, MX, or PTR, the records may contain a CNAME chain, but that
+    chain must eventually reach at least one record of the requested type.
+    """
+
+    current_name = normalize_name(question.qname)
+    visited_names = {current_name}
+    cname_count = 0
+
+    if question.qtype == TYPE_CNAME:
+        for record in records:
+            if (
+                record.rclass == question.qclass
+                and record.rtype == TYPE_CNAME
+                and record_name_matches(record.name, current_name)
+            ):
+                return True
+        return False
+
+    while True:
+        # Check whether the requested-type RRset exists for the current
+        # canonical name.
+        for record in records:
+            if (
+                record.rclass == question.qclass
+                and record.rtype == question.qtype
+                and record_name_matches(record.name, current_name)
+            ):
+                return True
+
+        # Otherwise, find the next CNAME link.
+        matching_cnames = []
+
+        for record in records:
+            if (
+                record.rclass == question.qclass
+                and record.rtype == TYPE_CNAME
+                and record_name_matches(record.name, current_name)
+            ):
+                matching_cnames.append(record)
+
+        if not matching_cnames:
+            return False
+
+        target_name = normalize_name(matching_cnames[0].rdata)
+
+        # One alias owner must not point to conflicting targets.
+        for record in matching_cnames:
+            if normalize_name(record.rdata) != target_name:
+                return False
+
+        cname_count += len(matching_cnames)
+        if cname_count > MAX_CNAME_RECORDS:
+            return False
+
+        if target_name in visited_names:
+            return False
+
         visited_names.add(target_name)
         current_name = target_name
 
