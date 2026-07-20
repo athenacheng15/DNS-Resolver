@@ -22,6 +22,14 @@ TYPE_CNAME = 5
 TYPE_PTR = 12
 TYPE_MX = 15
 
+CLASS_IN = 1
+
+RCODE_NOERROR = 0
+RCODE_FORMERR = 1
+RCODE_SERVFAIL = 2
+RCODE_NXDOMAIN = 3
+RCODE_REFUSED = 5
+
 SUPPORTED_QUERY_TYPES = {
     TYPE_A,
     TYPE_NS,
@@ -30,13 +38,13 @@ SUPPORTED_QUERY_TYPES = {
     TYPE_MX,
 }
 
-CLASS_IN = 1
-
-RCODE_NOERROR = 0
-RCODE_FORMERR = 1
-RCODE_SERVFAIL = 2
-RCODE_NXDOMAIN = 3
-RCODE_REFUSED = 5
+ENCODABLE_RECORD_TYPES = {
+    TYPE_A,
+    TYPE_NS,
+    TYPE_CNAME,
+    TYPE_PTR,
+    TYPE_MX,
+}
 
 
 class ResolutionLimitError(Exception):
@@ -323,6 +331,16 @@ def is_referral_response(message, question):
     return bool(get_referral_records(message))
 
 
+def filter_encodable_records(records):
+    """
+    Keep only resource records that the response encoder can safely encode.
+
+    Record order is preserved. Unsupported records such as SOA, AAAA,
+    TXT, and OPT are excluded from client-facing responses.
+    """
+    return [record for record in records if record.rtype in ENCODABLE_RECORD_TYPES]
+
+
 def make_resolution_result(
     answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR
 ):
@@ -396,7 +414,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         if message.header.aa == 1 and message.header.rcode == RCODE_NXDOMAIN:
             return make_resolution_result(
                 answers=list(cname_chain),
-                authorities=message.authority,
+                authorities=[],
                 additional=[],
                 rcode=RCODE_NXDOMAIN,
             )
@@ -416,8 +434,8 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             if final_answers:
                 return make_resolution_result(
                     answers=final_answers,
-                    authorities=message.authority,
-                    additional=message.additional,
+                    authorities=[],
+                    additional=[],
                     rcode=RCODE_NOERROR,
                 )
 
@@ -425,7 +443,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             if is_authoritative_nodata_response(message, current_question):
                 return make_resolution_result(
                     answers=[],
-                    authorities=message.authority,
+                    authorities=[],
                     additional=[],
                     rcode=RCODE_NOERROR,
                 )
@@ -458,8 +476,8 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         if final_answers:
             return make_resolution_result(
                 answers=cname_chain + final_answers,
-                authorities=message.authority,
-                additional=message.additional,
+                authorities=[],
+                additional=[],
                 rcode=RCODE_NOERROR,
             )
 
@@ -480,7 +498,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         if is_authoritative_nodata_response(message, current_question):
             return make_resolution_result(
                 answers=list(cname_chain),
-                authorities=message.authority,
+                authorities=[],
                 additional=[],
                 rcode=RCODE_NOERROR,
             )
@@ -749,13 +767,16 @@ def build_client_response(query_header, question, resolution_result):
             question=question,
             rcode=RCODE_SERVFAIL,
         )
+    answers = filter_encodable_records(resolution_result["answers"])
+    authorities = filter_encodable_records(resolution_result["authorities"])
+    additional = filter_encodable_records(resolution_result["additional"])
 
     return encode_dns_response(
         query_header=query_header,
         question=question,
-        answers=resolution_result["answers"],
-        authorities=resolution_result["authorities"],
-        additional=resolution_result["additional"],
+        answers=answers,
+        authorities=authorities,
+        additional=additional,
         rcode=resolution_result["rcode"],
     )
 
