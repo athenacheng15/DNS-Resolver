@@ -21,6 +21,15 @@ TYPE_NS = 2
 TYPE_CNAME = 5
 TYPE_PTR = 12
 TYPE_MX = 15
+
+SUPPORTED_QUERY_TYPES = {
+    TYPE_A,
+    TYPE_NS,
+    TYPE_CNAME,
+    TYPE_PTR,
+    TYPE_MX,
+}
+
 CLASS_IN = 1
 
 RCODE_NOERROR = 0
@@ -105,6 +114,10 @@ def decode_client_query(query_data):
     questions, offset = parse_questions(query_data, offset, header.qdcount)
 
     return header, questions
+
+
+def is_supported_client_question(question):
+    return question.qtype in SUPPORTED_QUERY_TYPES
 
 
 def question_match(actual_question, expected_question):
@@ -750,6 +763,15 @@ def handle_client_query(
             return
 
         question = questions[0]
+
+        if not is_supported_client_question(question):
+            response_data = build_client_response(
+                header,
+                question,
+                resolution_result=None,
+            )
+            server_socket.sendto(response_data, client_address)
+            return
 
         # Root-hints queries can be answered locally without contacting upstream DNS servers.
         resolution_result = build_root_hints_response(
