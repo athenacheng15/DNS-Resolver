@@ -33,8 +33,10 @@ SUPPORTED_QUERY_TYPES = {
 CLASS_IN = 1
 
 RCODE_NOERROR = 0
+RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 RCODE_NXDOMAIN = 3
+RCODE_REFUSED = 5
 
 
 class ResolutionLimitError(Exception):
@@ -555,6 +557,21 @@ def get_root_server_ips(root_a_records):
     return [record.rdata for record in root_a_records if record.rtype == 1]
 
 
+def is_retryable_upstream_response(message):
+    """
+    Return True when a valid upstream DNS response should be treated as a
+    failure for this candidate server.
+
+    NOERROR responses may contain a final answer, NODATA, CNAME, or referral.
+    NXDOMAIN may be terminal when authoritative, so it must be examined by
+    iterative_resolve().
+    """
+    return message.header.rcode not in (
+        RCODE_NOERROR,
+        RCODE_NXDOMAIN,
+    )
+
+
 def validate_upstream_response(
     response_data,
     response_address,
@@ -658,16 +675,22 @@ def query_upstream_candidate(server_ips, question, timeout, budget):
     """
     Query candidate upstream servers sequentially.
 
-    Each attempted server consumes one outbound-attempt unit. All attempts
-    share the same per-client resolution budget.
+    Each attempted server consumes one outbound-attempt unit. Timeouts,
+    invalid packets, and retryable DNS error responses cause the resolver
+    to continue with the next candidate.
     """
     for server_ip in server_ips:
         budget.use_outbound_attempt()
 
         result = query_upstream_server(server_ip, question, timeout, budget)
 
-        if result is not None:
-            return result
+        if result is None:
+            continue
+
+        if is_retryable_upstream_response(result["message"]):
+            continue
+
+        return result
 
     return None
 
