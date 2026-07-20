@@ -797,34 +797,41 @@ def encode_client_response_safely(
     rcode=RCODE_NOERROR,
     aa=0,
 ):
-    response = encode_dns_response(
-        query_header,
-        question,
-        answers,
-        authorities,
-        additional,
-        rcode,
-        aa,
-    )
+    try:
+        response = encode_dns_response(
+            query_header,
+            question,
+            answers,
+            authorities,
+            additional,
+            rcode,
+            aa,
+        )
+    except ValueError:
+        response = None
 
-    if len(response) <= MAX_CLIENT_DNS_RESPONSE_SIZE:
+    if response is not None and len(response) <= MAX_CLIENT_DNS_RESPONSE_SIZE:
         return response
 
-    compressed_response = encode_dns_response_compressed(
-        query_header,
-        question,
-        answers,
-        authorities,
-        additional,
-        rcode,
-        aa,
-    )
+    try:
+        compressed_response = encode_dns_response_compressed(
+            query_header,
+            question,
+            answers,
+            authorities,
+            additional,
+            rcode,
+            aa,
+        )
+    except ValueError:
+        compressed_response = None
 
-    if len(compressed_response) <= MAX_CLIENT_DNS_RESPONSE_SIZE:
+    if (
+        compressed_response is not None
+        and len(compressed_response) <= MAX_CLIENT_DNS_RESPONSE_SIZE
+    ):
         return compressed_response
 
-    # The complete required response still does not fit.
-    # Return a separate complete SERVFAIL response.
     servfail_response = encode_dns_response(
         query_header=query_header,
         question=question,
