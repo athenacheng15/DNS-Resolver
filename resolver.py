@@ -5,6 +5,8 @@ from dns_message import parse_header, parse_questions, parse_dns_message
 from dns_encoder import encode_dns_response, encode_upstream_query
 from dns_records import DNSQuestion
 
+from utils import normalize_name
+
 UPSTREAM_DNS_PORT = 53
 MAX_DNS_MESSAGE_SIZE = 4096
 
@@ -71,24 +73,16 @@ def decode_client_query(query_data):
     return header, questions
 
 
-def normalize_dns_name(name):
-    if name == ".":
-        return "."
-
-    return name.rstrip(".").lower() + "."
-
-
 def question_match(actual_question, expected_question):
     return (
-        normalize_dns_name(actual_question.qname)
-        == normalize_dns_name(expected_question.qname)
+        normalize_name(actual_question.qname) == normalize_name(expected_question.qname)
         and actual_question.qtype == expected_question.qtype
         and actual_question.qclass == expected_question.qclass
     )
 
 
 def record_name_matches(actual_name, expected_name):
-    return normalize_dns_name(actual_name) == normalize_dns_name(expected_name)
+    return normalize_name(actual_name) == normalize_name(expected_name)
 
 
 def find_requested_answer(message, question):
@@ -117,7 +111,7 @@ def find_cname_answer(message, expected_name, expected_class):
 
 
 def extract_cname_chain_and_final_answers(message, question):
-    original_name = normalize_dns_name(question.qname)
+    original_name = normalize_name(question.qname)
 
     # A direct CNAME query must return only the CNAME RRset whose owner is the original QNAME.
     # Its target must not be chased.
@@ -147,10 +141,10 @@ def extract_cname_chain_and_final_answers(message, question):
             return cname_chain, [], current_name
 
         # A CNAME owner should point to one canonical target.
-        target_name = normalize_dns_name(cname_records[0].rdata)
+        target_name = normalize_name(cname_records[0].rdata)
 
         for record in cname_records:
-            if normalize_dns_name(record.rdata) != target_name:
+            if normalize_name(record.rdata) != target_name:
                 raise ValueError("Conflicting CNAME targets")
 
         if len(cname_chain) > MAX_CNAME_RECORDS:
@@ -178,7 +172,7 @@ def get_matching_glue_ips(message, ns_records):
     # Match glue records only for referred name servers.
     glue_ips = []
     for ns_record in ns_records:
-        ns_name = normalize_dns_name(ns_record.rdata)
+        ns_name = normalize_name(ns_record.rdata)
 
         for additional_record in message.additional:
             if additional_record.rclass != CLASS_IN:
@@ -186,7 +180,7 @@ def get_matching_glue_ips(message, ns_records):
             if additional_record.rtype != TYPE_A:
                 continue
 
-            additional_name = normalize_dns_name(additional_record.name)
+            additional_name = normalize_name(additional_record.name)
             if additional_name == ns_name:
                 glue_ips.append(additional_record.rdata)
 
@@ -259,7 +253,7 @@ def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
 def iterative_resolve(question, root_server_ips, timeout, budget):
 
     current_question = DNSQuestion(
-        qname=normalize_dns_name(question.qname),
+        qname=normalize_name(question.qname),
         qtype=question.qtype,
         qclass=question.qclass,
     )
@@ -267,7 +261,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
     candidate_ips = list(root_server_ips)
 
     cname_chain = []
-    visited_cname_names = {normalize_dns_name(question.qname)}
+    visited_cname_names = {normalize_name(question.qname)}
 
     while candidate_ips:
         upstream_result = query_upstream_candidate(
@@ -323,11 +317,11 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             if len(cname_chain) + len(response_cnames) > MAX_CNAME_RECORDS:
                 raise ResolutionLimitError("CNAME chain limit reached")
 
-            expected_owner = normalize_dns_name(current_question.qname)
+            expected_owner = normalize_name(current_question.qname)
 
             for cname_record in response_cnames:
-                owner_name = normalize_dns_name(cname_record.name)
-                target_name = normalize_dns_name(cname_record.rdata)
+                owner_name = normalize_name(cname_record.name)
+                target_name = normalize_name(cname_record.rdata)
 
                 # The extracted chain should continue from the current name.
                 if owner_name != expected_owner:
@@ -395,7 +389,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
 
 
 def build_root_hints_response(question, root_ns_records, root_a_records, root_a_map):
-    qname = normalize_dns_name(question.qname)
+    qname = normalize_name(question.qname)
 
     # Root hints only contains IN records
     if question.qclass != 1:
@@ -409,10 +403,10 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
         # For every returned NS record, find its matching A glue records.
         # The nested loop preserves: NS record order, A record file order.
         for ns_record in root_ns_records:
-            ns_name = normalize_dns_name(ns_record.rdata)
+            ns_name = normalize_name(ns_record.rdata)
 
             for a_record in root_a_records:
-                a_name = normalize_dns_name(a_record.name)
+                a_name = normalize_name(a_record.name)
 
                 if a_name == ns_name:
                     additional.append(a_record)
