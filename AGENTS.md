@@ -6,13 +6,19 @@ Use Conventional Commit style:
 
 ```text
 type(scope): short imperative summary
+
+- concise description of the first material change
+- concise description of the second material change
 ```
+
+Include a commit body with concise bullet points summarising the material
+changes. Use imperative, present-tense wording in both the summary and bullets.
 
 Examples:
 
 ```text
 feat(parser): parse DNS header
-feat(dns_records): add DNS record models
-feat(dns_message): add byte readers
-feat(parser): add initial parser entry point
+
+- decode header flags and section counts
+- validate the minimum DNS header length
 ```

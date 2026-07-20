@@ -42,3 +42,36 @@ Bitwise OR combines the fields into one 16-bit flags value.
 ```
 flags |= 1 << 15
 ```
+
+## CNAME Resolution
+
+### CNAME Response Parsing
+
+- `extract_cname_chain_and_final_answers()` examines the Answer section of one upstream DNS response.
+- It follows CNAME records in order until:
+  - the requested record type is found;
+  - no further CNAME exists;
+  - a CNAME loop is detected; or
+  - the maximum CNAME limit is exceeded.
+- The function returns:
+  - the ordered CNAME chain;
+  - the final requested-type answers;
+  - the terminal canonical name.
+- Multiple CNAME records for the same owner are accepted only when they point to the same target.
+- Conflicting CNAME targets are treated as an invalid response.
+- DNS names are normalised before comparison to support case-insensitive matching.
+
+### Direct CNAME Queries
+
+- A direct `CNAME` query returns only the CNAME RRset owned by the original queried name.
+- The resolver must not follow the CNAME target for a direct `CNAME` query.
+
+Example:
+
+```text
+Query:
+CNAME www.example.com.
+
+Response:
+www.example.com. CNAME edge.example.net.
+```
