@@ -84,19 +84,34 @@ def print_flags(header):
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python3 parser.py <dns-message-file>")
-        sys.exit(1)
+        print(
+            "Usage: python3 parser.py <dns-message-file>",
+            file=sys.stderr,
+        )
+        return 1
 
     filename = sys.argv[1]
 
-    with open(filename, "rb") as file:  # r:read, b:binary
-        data = file.read()
+    try:
+        with open(filename, "rb") as file:  # r:read, b:binary
+            data = file.read()
+    except OSError as error:
+        print(f"Error reading file {filename}: {error}", file=sys.stderr)
+        return 1
 
-    header, offset = parse_header(data)
-    questions, offset = parse_questions(data, offset, header.qdcount)
-    answers, offset = parse_resource_records(data, offset, header.ancount)
-    authorities, offset = parse_resource_records(data, offset, header.nscount)
-    additional, offset = parse_resource_records(data, offset, header.arcount)
+    try:
+        header, offset = parse_header(data)
+        questions, offset = parse_questions(data, offset, header.qdcount)
+        answers, offset = parse_resource_records(data, offset, header.ancount)
+        authorities, offset = parse_resource_records(data, offset, header.nscount)
+        additional, offset = parse_resource_records(data, offset, header.arcount)
+
+        if offset != len(data):
+            raise ValueError("Unexpected trailing data in DNS message")
+
+    except (ValueError, UnicodeError) as error:
+        print(f"Error parsing DNS message: {error}", file=sys.stderr)
+        return 1
 
     print(f"ID : {header.message_id}")
     print_flags(header)
@@ -106,10 +121,8 @@ def main():
     print_records("--- AUTHORITY ---", authorities)
     print_records("--- ADDITIONAL ---", additional)
 
-    # For debugging:
-    # print(f"Next offset: {offset}")
-    # print(f"File size: {len(data)} bytes")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
