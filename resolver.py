@@ -117,7 +117,15 @@ def find_cname_answer(message, expected_name, expected_class):
 
 
 def extract_cname_chain_and_final_answers(message, question):
-    current_name = normalize_dns_name(question.qname)
+    original_name = normalize_dns_name(question.qname)
+
+    # A direct CNAME query must return only the CNAME RRset whose owner is the original QNAME.
+    # Its target must not be chased.
+    if question.qtype == TYPE_CNAME:
+        direct_answers = find_cname_answer(message, original_name, question.qclass)
+        return [], direct_answers, original_name
+
+    current_name = original_name
     visited_names = {current_name}
     cname_chain = []
 
@@ -144,7 +152,6 @@ def extract_cname_chain_and_final_answers(message, question):
         for record in cname_records:
             if normalize_dns_name(record.rdata) != target_name:
                 raise ValueError("Conflicting CNAME targets")
-        cname_chain.extend(cname_records)
 
         if len(cname_chain) > MAX_CNAME_RECORDS:
             raise ResolutionLimitError("CNAME chain limit reached")
@@ -152,6 +159,7 @@ def extract_cname_chain_and_final_answers(message, question):
         if target_name in visited_names:
             raise ResolutionLimitError("CNAME loop detected")
 
+        cname_chain.append(cname_records)
         visited_names.add(target_name)
         current_name = target_name
 
