@@ -307,6 +307,70 @@ def has_complete_positive_answer(question, records):
         current_name = target_name
 
 
+def get_complete_a_addresses(original_name, records):
+    """
+    Follow a complete CNAME chain starting at original_name and return
+    the IPv4 addresses belonging to the final canonical name.
+
+    Return an empty list when the chain is incomplete, conflicting,
+    looping, too long, or has no final A records.
+    """
+    current_name = normalize_name(original_name)
+    visited_names = {current_name}
+    cname_count = 0
+
+    while True:
+        addresses = []
+
+        for record in records:
+            if (
+                record.rclass == CLASS_IN
+                and record.rtype == TYPE_A
+                and record_name_matches(
+                    record.name,
+                    current_name,
+                )
+            ):
+                addresses.append(record.rdata)
+
+        if addresses:
+            return addresses
+
+        matching_cnames = []
+
+        for record in records:
+            if (
+                record.rclass == CLASS_IN
+                and record.rtype == TYPE_CNAME
+                and record_name_matches(
+                    record.name,
+                    current_name,
+                )
+            ):
+                matching_cnames.append(record)
+
+        if not matching_cnames:
+            return []
+
+        target_name = normalize_name(matching_cnames[0].rdata)
+
+        # The same alias owner must not point to different targets.
+        for record in matching_cnames:
+            if normalize_name(record.rdata) != target_name:
+                return []
+
+        cname_count += len(matching_cnames)
+
+        if cname_count > MAX_CNAME_RECORDS:
+            return []
+
+        if target_name in visited_names:
+            return []
+
+        visited_names.add(target_name)
+        current_name = target_name
+
+
 def get_referral_records(message, question):
     matching_records = []
     most_specific_label_count = -1
@@ -419,15 +483,7 @@ def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
         if nested_result["rcode"] != RCODE_NOERROR:
             continue
 
-        addresses = []
-
-        for record in nested_result["answers"]:
-            if (
-                record.rclass == CLASS_IN
-                and record.rtype == TYPE_A
-                and record_name_matches(record.name, ns_record.rdata)
-            ):
-                addresses.append(record.rdata)
+        addresses = get_complete_a_addresses(ns_record.rdata, nested_result["answers"])
 
         if addresses:
             return addresses
