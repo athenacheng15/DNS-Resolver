@@ -586,8 +586,19 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     return None
 
 
-def get_root_server_ips(root_a_records):
-    return [record.rdata for record in root_a_records if record.rtype == 1]
+def get_root_server_ips(root_ns_records, root_a_records):
+    root_server_ips = []
+
+    for ns_record in root_ns_records:
+        ns_name = normalize_name(ns_record.rdata)
+
+        for a_record in root_a_records:
+            a_name = normalize_name(a_record.name)
+
+            if a_name == ns_name:
+                root_server_ips.append(a_record.rdata)
+
+    return root_server_ips
 
 
 def is_retryable_upstream_response(message):
@@ -864,7 +875,7 @@ def run_server(
     """
 
     # Root server IPs are the starting point for iterative resolution.
-    root_server_ips = get_root_server_ips(root_a_records)
+    root_server_ips = get_root_server_ips(root_ns_records, root_a_records)
 
     while True:
         query_data, client_address = server_socket.recvfrom(MAX_DNS_MESSAGE_SIZE)
