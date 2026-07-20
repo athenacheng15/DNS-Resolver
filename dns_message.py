@@ -81,7 +81,7 @@ def parse_name(data, offset):
         if (length & 0xC0) == 0xC0:
             ensure_available(data, offset, 2)
 
-            if jumps > 20:
+            if jumps >= 20:
                 raise ValueError("Too many DNS compression pointer jumps")
 
             pointer_bytes = data[offset : offset + 2]

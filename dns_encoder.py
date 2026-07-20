@@ -130,11 +130,12 @@ def build_upstream_query_flags():
     return 0
 
 
-def build_response_flags(query_header, rcode=0):
+def build_response_flags(query_header, rcode=0, aa=0):
     flags = 0
 
     flags |= 1 << 15  # | for bitwise OR
     flags |= (query_header.opcode & 0xF) << 11
+    flags |= (aa & 0x1) << 10
     flags |= (query_header.rd & 0x1) << 8
     flags |= 1 << 7
     flags |= rcode & 0xF
@@ -143,13 +144,19 @@ def build_response_flags(query_header, rcode=0):
 
 
 def encode_dns_response(
-    query_header, question, answers=None, authorities=None, additional=None, rcode=0
+    query_header,
+    question,
+    answers=None,
+    authorities=None,
+    additional=None,
+    rcode=0,
+    aa=0,
 ):
     answers = [] if answers is None else answers
     authorities = [] if authorities is None else authorities
     additional = [] if additional is None else additional
 
-    flags = build_response_flags(query_header, rcode)
+    flags = build_response_flags(query_header, rcode, aa)
 
     header_bytes = encode_header(
         message_id=query_header.message_id,
