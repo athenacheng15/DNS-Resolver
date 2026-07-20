@@ -14,6 +14,7 @@ MAX_DNS_MESSAGE_SIZE = 4096
 MAX_OUTBOUND_ATTEMPTS = 50
 MAX_REFERRAL_LEVELS = 10
 MAX_CNAME_RECORDS = 10
+MAX_RESOLUTION_SECONDS = 30
 
 TYPE_A = 1
 TYPE_NS = 2
@@ -32,19 +33,51 @@ class ResolutionLimitError(Exception):
 
 
 class ResolutionBudget:
-    def __init__(self):
+    """
+    Track limits shared by one complete client resolution.
+
+    The same budget is reused by:
+    - the original iterative lookup,
+    - nested name-server address lookups,
+    - CNAME chasing.
+
+    This ensures all work triggered by one client query shares the same
+    outbound-attempt, referral-level, and wall-clock limits.
+    """
+
+    def __init__(self, timeout):
         self.outbound_attempts = 0
-        self.referrals_levels = 0
+        self.referral_levels = 0
+
+        total_time_limit = min(MAX_RESOLUTION_SECONDS, MAX_OUTBOUND_ATTEMPTS * timeout)
+        self.deadline = time.monotonic() + total_time_limit
+
+    def remaining_time(self):
+        """
+        Return the number of seconds remaining for this client resolution.
+        The returned value may be zero when the overall deadline has passed.
+        """
+
+        return max(0.0, self.deadline - time.monotonic())
+
+    def ensure_time_remaining(self):
+        """
+        Raise ResolutionLimitError when the total resolution deadline expires.
+        """
+        if self.remaining_time() <= 0:
+            raise ResolutionLimitError("Total resolution time limit reached")
 
     def use_outbound_attempt(self):
+        self.ensure_time_remaining()
         if self.outbound_attempts >= MAX_OUTBOUND_ATTEMPTS:
             raise ResolutionLimitError("Outbound attempts limit reached")
         self.outbound_attempts += 1
 
     def use_referral_level(self):
-        if self.referrals_levels >= MAX_REFERRAL_LEVELS:
+        self.ensure_time_remaining()
+        if self.referral_levels >= MAX_REFERRAL_LEVELS:
             raise ResolutionLimitError("Referral levels limit reached")
-        self.referrals_levels += 1
+        self.referral_levels += 1
 
 
 def parse_args():
@@ -333,6 +366,8 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
     visited_cname_names = {normalize_name(question.qname)}
 
     while candidate_ips:
+        budget.ensure_time_remaining()
+
         upstream_result = query_upstream_candidate(
             candidate_ips, current_question, timeout, budget
         )
@@ -447,6 +482,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             candidate_ips = glue_ips
         else:
             # Resolve NS hostnames from the root when no glue is available.
+            budget.ensure_time_remaining()
             candidate_ips = resolve_name_server_addresses(
                 ns_records, root_server_ips, timeout, budget
             )
@@ -615,16 +651,16 @@ def resolve_client_question(question, root_server_ips, timeout, cache):
     NXDOMAIN, NODATA, SERVFAIL, and incomplete CNAME chains are not cached.
     """
 
-    cache_answer = cache.get(question)
-    if cache_answer is not None:
+    cache_answers = cache.get(question)
+    if cache_answers is not None:
         return make_resolution_result(
-            answers=cache_answer,
+            answers=cache_answers,
             authorities=[],
             additional=[],
             rcode=RCODE_NOERROR,
         )
 
-    budget = ResolutionBudget()
+    budget = ResolutionBudget(timeout)
     try:
         resolution_result = iterative_resolve(
             question, root_server_ips, timeout, budget
