@@ -342,13 +342,14 @@ def filter_encodable_records(records):
 
 
 def make_resolution_result(
-    answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR
+    answers=None, authorities=None, additional=None, rcode=RCODE_NOERROR, aa=0
 ):
     return {
         "answers": [] if answers is None else answers,
         "authorities": [] if authorities is None else authorities,
         "additional": [] if additional is None else additional,
         "rcode": rcode,
+        "aa": aa,
     }
 
 
@@ -397,6 +398,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
 
     cname_chain = []
     visited_cname_names = {normalize_name(question.qname)}
+    response_was_assembled = False
 
     while candidate_ips:
         budget.ensure_time_remaining()
@@ -417,6 +419,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
                 authorities=[],
                 additional=[],
                 rcode=RCODE_NXDOMAIN,
+                aa=1 if not response_was_assembled else 0,
             )
 
         # Other upstream errors currently fail this resolution.
@@ -437,6 +440,11 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
                     authorities=[],
                     additional=[],
                     rcode=RCODE_NOERROR,
+                    aa=(
+                        1
+                        if message.header.aa == 1 and not response_was_assembled
+                        else 0
+                    ),
                 )
 
             # Stop if this is an authoritative NODATA response.
@@ -446,6 +454,7 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
                     authorities=[],
                     additional=[],
                     rcode=RCODE_NOERROR,
+                    aa=1 if not response_was_assembled else 0,
                 )
 
         # For A, NS, MX, and PTR queries, process any CNAME records found
@@ -479,12 +488,14 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
                 authorities=[],
                 additional=[],
                 rcode=RCODE_NOERROR,
+                aa=(1 if message.header.aa == 1 and not response_was_assembled else 0),
             )
 
         # A CNAME chain was found, but this response did not contain the
         # final requested-type RRset. Restart iterative resolution from
         # the root for the canonical target, preserving the original type.
         if response_cnames:
+            response_was_assembled = True
             current_question = DNSQuestion(
                 qname=terminal_name,
                 qtype=question.qtype,
@@ -501,12 +512,14 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
                 authorities=[],
                 additional=[],
                 rcode=RCODE_NOERROR,
+                aa=1 if not response_was_assembled else 0,
             )
 
         if not is_referral_response(message, current_question):
             return None
 
         budget.use_referral_level()
+        response_was_assembled = True
 
         ns_records = get_referral_records(message)
         glue_ips = get_matching_glue_ips(message, ns_records)
@@ -554,6 +567,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
             "authorities": [],
             "additional": additional,
             "rcode": 0,
+            "aa": 0,
         }
 
     # Query: a.root-servers.net. A, b.root-servers.net. A, etc.
@@ -565,6 +579,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
                 "authorities": [],
                 "additional": [],
                 "rcode": 0,
+                "aa": 0,
             }
 
     # This query cannot be answered using named.root.
@@ -778,6 +793,7 @@ def build_client_response(query_header, question, resolution_result):
         authorities=authorities,
         additional=additional,
         rcode=resolution_result["rcode"],
+        aa=resolution_result["aa"],
     )
 
 
