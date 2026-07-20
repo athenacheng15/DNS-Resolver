@@ -357,6 +357,10 @@ def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
     for ns_record in ns_records:
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
 
+        # Starting a no-glue nested NS hostname lookup consumes
+        # one referral level from the shared resolution budget.
+        budget.use_referral_level()
+
         nested_result = iterative_resolve(
             ns_question,
             root_server_ips,
