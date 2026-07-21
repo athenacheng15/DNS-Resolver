@@ -140,7 +140,12 @@ def query_upstream_candidate(
     for server_ip in server_ips:
         budget.use_outbound_attempt()
 
-        result = query_upstream_server(server_ip, question, timeout, budget)
+        try:
+            result = query_upstream_server(server_ip, question, timeout, budget)
+        except OSError:
+            # A socket failure only makes this candidate unusable. Other
+            # candidates should still be attempted within the shared budget.
+            continue
 
         if result is None:
             continue

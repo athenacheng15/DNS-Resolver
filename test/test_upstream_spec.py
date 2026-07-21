@@ -43,6 +43,43 @@ class UpstreamSpecificationTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in query.call_args_list], ["192.0.2.1", "192.0.2.2"])
         self.assertEqual(budget.outbound_attempts, 2)
 
+    def test_socket_error_retries_next_candidate(self):
+        budget = ResolutionBudget(1)
+        usable = {"message": message(flags=0x8400)}
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=[OSError("network unreachable"), usable],
+        ) as query:
+            result = query_upstream_candidate(
+                ["192.0.2.1", "192.0.2.2"],
+                question(),
+                1,
+                budget,
+            )
+
+        self.assertIs(result, usable)
+        self.assertEqual(query.call_count, 2)
+        self.assertEqual(budget.outbound_attempts, 2)
+
+    def test_all_socket_errors_exhaust_candidates(self):
+        budget = ResolutionBudget(1)
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=OSError("network unreachable"),
+        ) as query:
+            result = query_upstream_candidate(
+                ["192.0.2.1", "192.0.2.2"],
+                question(),
+                1,
+                budget,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(query.call_count, 2)
+        self.assertEqual(budget.outbound_attempts, 2)
+
     def test_non_authoritative_nxdomain_retries_next_candidate(self):
         non_authoritative_nxdomain = {"message": message(flags=0x8003)}
         authoritative_nxdomain = {"message": message(flags=0x8403)}

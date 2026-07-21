@@ -67,6 +67,41 @@ class ServerSpecificationTests(unittest.TestCase):
             self.assertEqual(len(fake.sent), 1)
             release_slow.set(); slow.join(0.5)
 
+    def test_upstream_socket_errors_return_servfail_to_client(self):
+        fake = FakeSocket()
+        client_address = ("127.0.0.1", 50001)
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=OSError("network unreachable"),
+        ):
+            handle_client_query(
+                fake,
+                query_wire(0xCAFE),
+                client_address,
+                [],
+                [],
+                {},
+                ["192.0.2.1", "192.0.2.2"],
+                1,
+                DNSCache(),
+            )
+
+        self.assertEqual(len(fake.sent), 1)
+        response_data, response_address = fake.sent[0]
+        parsed = parse_dns_message(response_data)
+
+        self.assertEqual(response_address, client_address)
+        self.assertEqual(parsed.header.message_id, 0xCAFE)
+        self.assertEqual(parsed.header.rcode, 2)
+        self.assertEqual(parsed.header.aa, 0)
+        self.assertEqual(parsed.header.tc, 0)
+        self.assertEqual(
+            (parsed.header.ancount, parsed.header.nscount, parsed.header.arcount),
+            (0, 0, 0),
+        )
+        self.assertEqual(parsed.questions[0].qname, "www.example.com.")
+
 
 if __name__ == "__main__":
     unittest.main()
