@@ -1,4 +1,5 @@
 from dns.records import ResourceRecord
+from utils import normalize_name
 
 TYPE_NAME_TO_NUM = {
     "A": 1,
@@ -8,10 +9,6 @@ TYPE_NAME_TO_NUM = {
 CLASS_NAME_TO_NUM = {
     "IN": 1,
 }
-
-
-def normalize_name(name):
-    return name.lower()
 
 
 def strip_comments(line):
