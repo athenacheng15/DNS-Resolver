@@ -1,6 +1,6 @@
 import time
 
-from resolver_core.constants import (
+from constants import (
     MAX_OUTBOUND_ATTEMPTS,
     MAX_REFERRAL_LEVELS,
     MAX_RESOLUTION_SECONDS,
@@ -10,18 +10,9 @@ from resolver_core.constants import (
 class ResolutionLimitError(Exception):
     pass
 
+
 class ResolutionBudget:
-    """
-    Track limits shared by one complete client resolution.
-
-    The same budget is reused by:
-    - the original iterative lookup,
-    - nested name-server address lookups,
-    - CNAME chasing.
-
-    This ensures all work triggered by one client query shares the same
-    outbound-attempt, referral-level, and wall-clock limits.
-    """
+    # Track limits shared by one complete client resolution.
 
     def __init__(self, timeout):
         self.outbound_attempts = 0
@@ -31,17 +22,9 @@ class ResolutionBudget:
         self.deadline = time.monotonic() + total_time_limit
 
     def remaining_time(self):
-        """
-        Return the number of seconds remaining for this client resolution.
-        The returned value may be zero when the overall deadline has passed.
-        """
-
         return max(0.0, self.deadline - time.monotonic())
 
     def ensure_time_remaining(self):
-        """
-        Raise ResolutionLimitError when the total resolution deadline expires.
-        """
         if self.remaining_time() <= 0:
             raise ResolutionLimitError("Total resolution time limit reached")
 

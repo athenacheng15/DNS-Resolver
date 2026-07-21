@@ -1,5 +1,4 @@
-from dns.records import DNSQuestion
-from resolver_core.constants import (
+from constants import (
     CLASS_IN,
     MAX_CNAME_RECORDS,
     RCODE_NOERROR,
@@ -7,6 +6,7 @@ from resolver_core.constants import (
     TYPE_A,
     TYPE_CNAME,
 )
+from dns.records import DNSQuestion
 from resolver_core.helpers import (
     extract_cname_chain_and_final_answers,
     get_complete_a_addresses,
@@ -23,7 +23,7 @@ from utils import normalize_name
 
 
 def is_usable_upstream_response(message, question):
-    """Return whether a response can advance or finish this lookup."""
+    # Return whether a response can advance or finish this lookup.
     if message.header.rcode == RCODE_NXDOMAIN:
         return message.header.aa == 1
 
@@ -36,7 +36,9 @@ def is_usable_upstream_response(message, question):
     )
 
     if message.header.aa == 1:
-        return bool(response_cnames or final_answers) or is_authoritative_nodata_response(
+        return bool(
+            response_cnames or final_answers
+        ) or is_authoritative_nodata_response(
             message,
             question,
         )
@@ -51,7 +53,7 @@ def resolve_next_name_server_addresses(
     timeout,
     budget,
 ):
-    """Resolve the next referred NS name with usable IPv4 addresses."""
+    # Resolve the next referred NS name with usable IPv4 addresses.
     for index in range(start_index, len(ns_records)):
         ns_record = ns_records[index]
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
@@ -129,16 +131,12 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         message = upstream_result["message"]
         pending_ns_records = []
         pending_ns_index = 0
-        client_response_aa = (
-            0 if uses_multiple_answer_responses else message.header.aa
-        )
+        client_response_aa = 0 if uses_multiple_answer_responses else message.header.aa
 
         # NXDOMAIN is final only when returned by an authoritative server.
         if message.header.aa == 1 and message.header.rcode == RCODE_NXDOMAIN:
             return make_resolution_result(
                 answers=list(cname_chain),
-                authorities=[],
-                additional=[],
                 rcode=RCODE_NXDOMAIN,
                 aa=client_response_aa,
             )
@@ -152,25 +150,18 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         )
 
         # Direct CNAME query:
-        # extract_cname_chain_and_final_answers() returns the requested
-        # CNAME RRset as final_answers and does not chase its target.
+        # extract_cname_chain_and_final_answers() returns the requested CNAME RRset as final_answers
+        # do not chase its target.
         if current_question.qtype == TYPE_CNAME:
             if final_answers:
                 return make_resolution_result(
                     answers=final_answers,
-                    authorities=[],
-                    additional=[],
-                    rcode=RCODE_NOERROR,
                     aa=client_response_aa,
                 )
 
             # Stop if this is an authoritative NODATA response.
             if is_authoritative_nodata_response(message, current_question):
                 return make_resolution_result(
-                    answers=[],
-                    authorities=[],
-                    additional=[],
-                    rcode=RCODE_NOERROR,
                     aa=client_response_aa,
                 )
 
@@ -202,15 +193,11 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         if final_answers:
             return make_resolution_result(
                 answers=cname_chain + final_answers,
-                authorities=[],
-                additional=[],
-                rcode=RCODE_NOERROR,
                 aa=client_response_aa,
             )
 
-        # A CNAME chain was found, but this response did not contain the
-        # final requested-type RRset. Restart iterative resolution from
-        # the root for the canonical target, preserving the original type.
+        # A CNAME chain was found, but this response did not contain the final requested-type RRset.
+        # Restart iterative resolution from the root for the canonical target, preserving the original type.
         if response_cnames:
             uses_multiple_answer_responses = True
             current_question = DNSQuestion(
@@ -221,14 +208,11 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
             candidate_ips = list(root_server_ips)
             continue
 
-        # No requested answer and no CNAME remain. If the response is
-        # authoritative, this is terminal NODATA rather than a referral.
+        # No requested answer and no CNAME remain.
+        # If the response is authoritative, this is terminal NODATA rather than a referral.
         if is_authoritative_nodata_response(message, current_question):
             return make_resolution_result(
                 answers=list(cname_chain),
-                authorities=[],
-                additional=[],
-                rcode=RCODE_NOERROR,
                 aa=client_response_aa,
             )
 
@@ -261,23 +245,12 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
 
 
 def resolve_client_question(question, root_server_ips, timeout, cache):
-    """
-    Resolve one client question using the shared positive-answer cache.
 
-    A complete unexpired cached answer is returned without sending any
-    upstream DNS packets. On a cache miss, iterative resolution is used.
-
-    Only complete positive NOERROR answers are inserted into the cache.
-    NXDOMAIN, NODATA, SERVFAIL, and incomplete CNAME chains are not cached.
-    """
-
+    # Resolve one client question using the shared positive-answer cache.
     cache_answers = cache.get(question)
     if cache_answers is not None:
         return make_resolution_result(
             answers=cache_answers,
-            authorities=[],
-            additional=[],
-            rcode=RCODE_NOERROR,
         )
 
     budget = ResolutionBudget(timeout)

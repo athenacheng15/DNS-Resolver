@@ -1,30 +1,23 @@
 import socket
 import time
 
-from dns.encoder import encode_upstream_query
-from dns.message import parse_dns_message
-from resolver_core.constants import (
+from constants import (
     MAX_RECEIVED_DNS_MESSAGE_SIZE,
     RCODE_NOERROR,
     RCODE_NXDOMAIN,
     UPSTREAM_DNS_PORT,
 )
+from dns.encoder import encode_upstream_query
+from dns.message import parse_dns_message
 from resolver_core.helpers import question_match
 
 
 def is_retryable_upstream_response(message):
-    """
-    Return True when a valid upstream DNS response should be treated as a
-    failure for this candidate server.
-
-    NOERROR responses may contain a final answer, NODATA, CNAME, or referral.
-    NXDOMAIN may be terminal when authoritative, so it must be examined by
-    iterative_resolve().
-    """
     if message.header.rcode == RCODE_NXDOMAIN:
         return message.header.aa != 1
 
     return message.header.rcode != RCODE_NOERROR
+
 
 def validate_upstream_response(
     response_data,
@@ -73,17 +66,10 @@ def validate_upstream_response(
 
     return message
 
+
 def query_upstream_server(server_ip, question, timeout, budget):
-    """
-    Send one DNS query to one upstream server.
 
-    The function waits no longer than both:
-    - the configured timeout for one upstream attempt, and
-    - the remaining wall-clock budget for the complete client resolution.
-
-    Invalid or unrelated UDP datagrams are ignored while the same attempt
-    deadline remains active.
-    """
+    # Send one DNS query to one upstream server.
     budget.ensure_time_remaining()
     transaction_id, query_data = encode_upstream_query(question)
 
@@ -123,6 +109,7 @@ def query_upstream_server(server_ip, question, timeout, budget):
     finally:
         upstream_socket.close()
 
+
 def query_upstream_candidate(
     server_ips,
     question,
@@ -130,13 +117,7 @@ def query_upstream_candidate(
     budget,
     accept_response=None,
 ):
-    """
-    Query candidate upstream servers sequentially.
-
-    Each attempted server consumes one outbound-attempt unit. Timeouts,
-    invalid packets, and retryable DNS error responses cause the resolver
-    to continue with the next candidate.
-    """
+    # Query candidate upstream servers sequentially.
     for server_ip in server_ips:
         budget.use_outbound_attempt()
 

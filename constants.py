@@ -1,0 +1,68 @@
+# DNS protocol constants
+
+TYPE_A = 1
+TYPE_NS = 2
+TYPE_CNAME = 5
+TYPE_PTR = 12
+TYPE_MX = 15
+TYPE_AAAA = 28
+
+CLASS_IN = 1
+
+RCODE_NOERROR = 0
+RCODE_FORMERR = 1
+RCODE_SERVFAIL = 2
+RCODE_NXDOMAIN = 3
+RCODE_NOTIMP = 4
+RCODE_REFUSED = 5
+
+
+# DNS lookup tables
+
+TYPE_MAP = {
+    TYPE_A: "A",
+    TYPE_NS: "NS",
+    TYPE_CNAME: "CNAME",
+    TYPE_PTR: "PTR",
+    TYPE_MX: "MX",
+    TYPE_AAAA: "AAAA",
+}
+
+CLASS_MAP = {
+    CLASS_IN: "IN",
+}
+
+RCODE_MAP = {
+    RCODE_NOERROR: "NOERROR",
+    RCODE_FORMERR: "FORMERR",
+    RCODE_SERVFAIL: "SERVFAIL",
+    RCODE_NXDOMAIN: "NXDOMAIN",
+    RCODE_NOTIMP: "NOTIMP",
+    RCODE_REFUSED: "REFUSED",
+}
+
+TYPE_NAME_TO_NUM = {name: number for number, name in TYPE_MAP.items()}
+CLASS_NAME_TO_NUM = {name: number for number, name in CLASS_MAP.items()}
+
+
+# Resolver configuration
+
+UPSTREAM_DNS_PORT = 53
+MAX_RECEIVED_DNS_MESSAGE_SIZE = 4096
+MAX_CLIENT_DNS_RESPONSE_SIZE = 512
+
+MAX_OUTBOUND_ATTEMPTS = 50
+MAX_REFERRAL_LEVELS = 10
+MAX_CNAME_RECORDS = 10
+MAX_RESOLUTION_SECONDS = 30
+
+
+# Resolver-supported record types
+
+SUPPORTED_RECORD_TYPES = {
+    TYPE_A,
+    TYPE_NS,
+    TYPE_CNAME,
+    TYPE_PTR,
+    TYPE_MX,
+}

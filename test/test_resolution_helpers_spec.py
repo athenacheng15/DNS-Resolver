@@ -1,5 +1,6 @@
 import unittest
 
+from constants import MAX_CNAME_RECORDS
 from resolver_core.helpers import (
     extract_cname_chain_and_final_answers,
     get_matching_glue_ips,
@@ -85,6 +86,38 @@ class ResolutionHelperSpecificationTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             extract_cname_chain_and_final_answers(message(answers=records), q)
+
+    def test_cname_chain_at_limit_is_accepted(self):
+        records = [
+            rr(f"name{index}.example.", 5, f"name{index + 1}.example.")
+            for index in range(MAX_CNAME_RECORDS)
+        ]
+        records.append(
+            rr(f"name{MAX_CNAME_RECORDS}.example.", 1, "192.0.2.1")
+        )
+
+        chain, final, _ = extract_cname_chain_and_final_answers(
+            message(answers=records),
+            question("name0.example."),
+        )
+
+        self.assertEqual(len(chain), MAX_CNAME_RECORDS)
+        self.assertEqual(final[0].rdata, "192.0.2.1")
+
+    def test_cname_chain_over_limit_is_rejected(self):
+        records = [
+            rr(f"name{index}.example.", 5, f"name{index + 1}.example.")
+            for index in range(MAX_CNAME_RECORDS + 1)
+        ]
+        records.append(
+            rr(f"name{MAX_CNAME_RECORDS + 1}.example.", 1, "192.0.2.1")
+        )
+
+        with self.assertRaises(ResolutionLimitError):
+            extract_cname_chain_and_final_answers(
+                message(answers=records),
+                question("name0.example."),
+            )
 
 
 if __name__ == "__main__":

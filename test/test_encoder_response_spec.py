@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from dns.encoder import (
     encode_dns_response,
     encode_question,
@@ -8,9 +9,8 @@ from dns.encoder import (
     encode_upstream_query,
 )
 from dns.message import parse_dns_message
-from resolver import build_client_response, encode_client_response_safely
+from resolver import build_client_response
 from resolver_core.helpers import make_resolution_result
-from resolver_core.constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from test.helpers import header, question, rr
 
 
@@ -22,27 +22,67 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
         self.assertEqual(transaction_id, 0xCAFE)
         self.assertEqual(parsed.header.message_id, 0xCAFE)
         self.assertEqual(parsed.header.flags, 0)
-        self.assertEqual((parsed.header.qdcount, parsed.header.ancount, parsed.header.nscount, parsed.header.arcount), (1, 0, 0, 0))
-        self.assertEqual((parsed.questions[0].qname, parsed.questions[0].qtype, parsed.questions[0].qclass), ("Example.COM.", 15, 1))
+        self.assertEqual(
+            (
+                parsed.header.qdcount,
+                parsed.header.ancount,
+                parsed.header.nscount,
+                parsed.header.arcount,
+            ),
+            (1, 0, 0, 0),
+        )
+        self.assertEqual(
+            (
+                parsed.questions[0].qname,
+                parsed.questions[0].qtype,
+                parsed.questions[0].qclass,
+            ),
+            ("Example.COM.", 15, 1),
+        )
 
     def test_client_response_copies_id_opcode_rd_and_sets_required_flags(self):
         query_header = header(0x4242, (3 << 11) | (1 << 8))
-        wire = encode_dns_response(query_header, question(), [rr("www.example.com.", 1, "192.0.2.4")], rcode=3, aa=1)
+        wire = encode_dns_response(
+            query_header,
+            question(),
+            [rr("www.example.com.", 1, "192.0.2.4")],
+            rcode=3,
+            aa=1,
+        )
         parsed = parse_dns_message(wire)
         self.assertEqual(parsed.header.message_id, 0x4242)
-        self.assertEqual((parsed.header.qr, parsed.header.opcode, parsed.header.aa, parsed.header.tc), (1, 3, 1, 0))
-        self.assertEqual((parsed.header.rd, parsed.header.ra, parsed.header.rcode), (1, 1, 3))
+        self.assertEqual(
+            (
+                parsed.header.qr,
+                parsed.header.opcode,
+                parsed.header.aa,
+                parsed.header.tc,
+            ),
+            (1, 3, 1, 0),
+        )
+        self.assertEqual(
+            (parsed.header.rd, parsed.header.ra, parsed.header.rcode), (1, 1, 3)
+        )
         self.assertEqual(parsed.header.flags & 0x70, 0)  # Z, AD and CD
 
     def test_counts_equal_records_actually_encoded(self):
         wire = encode_dns_response(
-            header(), question(),
+            header(),
+            question(),
             [rr("example.com.", 1, "192.0.2.1")],
             [rr("example.com.", 2, "ns.example.com.")],
             [rr("ns.example.com.", 1, "192.0.2.53")],
         )
         parsed = parse_dns_message(wire)
-        self.assertEqual((parsed.header.qdcount, parsed.header.ancount, parsed.header.nscount, parsed.header.arcount), (1, 1, 1, 1))
+        self.assertEqual(
+            (
+                parsed.header.qdcount,
+                parsed.header.ancount,
+                parsed.header.nscount,
+                parsed.header.arcount,
+            ),
+            (1, 1, 1, 1),
+        )
         self.assertEqual(parsed.questions[0].qname, "www.example.com.")
 
     def test_response_compresses_names_in_owners_and_supported_rdata(self):
@@ -63,25 +103,28 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
 
         self.assertIn(b"\xc0\x0c", wire)
         self.assertEqual(parsed.header.ancount, len(records))
-        self.assertEqual([record.rdata for record in parsed.answers], [
-            "192.0.2.1",
-            "ns.example.com.",
-            "www.example.com.",
-            "www.example.com.",
-            {"preference": 10, "exchange": "mail.example.com."},
-        ])
+        self.assertEqual(
+            [record.rdata for record in parsed.answers],
+            [
+                "192.0.2.1",
+                "ns.example.com.",
+                "www.example.com.",
+                "www.example.com.",
+                {"preference": 10, "exchange": "mail.example.com."},
+            ],
+        )
 
     def test_compression_keeps_repeated_records_within_udp_limit(self):
         original_question = question()
         answers = [
-            rr("www.example.com.", 1, f"192.0.2.{index}")
-            for index in range(1, 21)
+            rr("www.example.com.", 1, f"192.0.2.{index}") for index in range(1, 21)
         ]
 
-        uncompressed_size = 12 + len(encode_question(original_question)) + len(
-            encode_records(answers)
+        uncompressed_size = (
+            12 + len(encode_question(original_question)) + len(encode_records(answers))
         )
-        wire = encode_client_response_safely(header(), original_question, answers)
+        result = make_resolution_result(answers=answers)
+        wire = build_client_response(header(), original_question, result)
         parsed = parse_dns_message(wire)
 
         self.assertGreater(uncompressed_size, MAX_CLIENT_DNS_RESPONSE_SIZE)
@@ -90,12 +133,11 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
         self.assertEqual(parsed.header.ancount, len(answers))
 
     def test_encoding_error_returns_servfail(self):
-        wire = encode_client_response_safely(
-            header(),
-            question(),
+        result = make_resolution_result(
             answers=[rr("www.example.com.", 1, "not-an-ip-address")],
             aa=1,
         )
+        wire = build_client_response(header(), question(), result)
         parsed = parse_dns_message(wire)
 
         self.assertEqual(parsed.header.rcode, RCODE_SERVFAIL)
@@ -108,14 +150,13 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
             for index in range(40)
         ]
 
-        wire = encode_client_response_safely(
-            header(),
-            question(),
-            answers,
+        result = make_resolution_result(
+            answers=answers,
             authorities=[rr("example.com.", 2, "ns.example.com.")],
             additional=[rr("ns.example.com.", 1, "192.0.2.53")],
             aa=1,
         )
+        wire = build_client_response(header(), question(), result)
         parsed = parse_dns_message(wire)
 
         self.assertLessEqual(len(wire), MAX_CLIENT_DNS_RESPONSE_SIZE)
