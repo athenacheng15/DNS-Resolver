@@ -73,7 +73,7 @@ class IterativeResolverSpecificationTests(unittest.TestCase):
         with patch("resolver_core.iterative.query_upstream_candidate", side_effect=[upstream(referral), upstream(answer)]) as query:
             result = iterative_resolve(question(), ["198.41.0.4"], 1, budget)
         self.assertEqual(result["answers"][0].rdata, "192.0.2.80")
-        self.assertEqual(result["aa"], 0)  # assembled through a referral
+        self.assertEqual(result["aa"], 1)
         self.assertEqual(query.call_args_list[1].args[0], ["192.0.2.53"])
 
     def test_no_glue_referral_resolves_ns_address_from_root(self):
@@ -85,6 +85,7 @@ class IterativeResolverSpecificationTests(unittest.TestCase):
         ) as nested:
             result = iterative_resolve(question(), ["198.41.0.4"], 1, budget)
         self.assertEqual(result["answers"][0].rdata, "192.0.2.80")
+        self.assertEqual(result["aa"], 1)
         nested.assert_called_once()
 
     def test_cname_is_chased_from_root_and_included_before_final_answer(self):
@@ -94,8 +95,32 @@ class IterativeResolverSpecificationTests(unittest.TestCase):
         with patch("resolver_core.iterative.query_upstream_candidate", side_effect=[upstream(cname), upstream(final)]) as query:
             result = iterative_resolve(question("alias.example."), ["198.41.0.4"], 1, budget)
         self.assertEqual([r.rtype for r in result["answers"]], [5, 1])
+        self.assertEqual(result["aa"], 0)
         self.assertEqual(query.call_args_list[1].args[0], ["198.41.0.4"])
         self.assertEqual(query.call_args_list[1].args[1].qname, "target.example.")
+
+    def test_same_authoritative_response_cname_chain_preserves_aa(self):
+        answer = message(
+            flags=0x8400,
+            answers=[
+                rr("alias.example.", 5, "target.example."),
+                rr("target.example.", 1, "192.0.2.9"),
+            ],
+        )
+
+        with patch(
+            "resolver_core.iterative.query_upstream_candidate",
+            return_value=upstream(answer),
+        ):
+            result = iterative_resolve(
+                question("alias.example."),
+                ["198.41.0.4"],
+                1,
+                ResolutionBudget(1),
+            )
+
+        self.assertEqual([record.rtype for record in result["answers"]], [5, 1])
+        self.assertEqual(result["aa"], 1)
 
     def test_authoritative_nxdomain_and_nodata_are_terminal(self):
         nxdomain = message(flags=0x8403)
@@ -105,6 +130,31 @@ class IterativeResolverSpecificationTests(unittest.TestCase):
                 result = iterative_resolve(question(), ["198.41.0.4"], 1, ResolutionBudget(1))
                 self.assertEqual(result["rcode"], rcode)
                 self.assertEqual(result["answers"], [])
+                self.assertEqual(result["aa"], 1)
+
+    def test_referral_then_authoritative_negative_response_preserves_aa(self):
+        referral = message(
+            authority=[rr("example.com.", 2, "ns.example.com.")],
+            additional=[rr("ns.example.com.", 1, "192.0.2.53")],
+        )
+
+        for terminal, rcode in (
+            (message(flags=0x8403), 3),
+            (message(flags=0x8400), 0),
+        ):
+            with self.subTest(rcode=rcode), patch(
+                "resolver_core.iterative.query_upstream_candidate",
+                side_effect=[upstream(referral), upstream(terminal)],
+            ):
+                result = iterative_resolve(
+                    question(),
+                    ["198.41.0.4"],
+                    1,
+                    ResolutionBudget(1),
+                )
+
+            self.assertEqual(result["rcode"], rcode)
+            self.assertEqual(result["aa"], 1)
 
     def test_cache_hit_avoids_upstream_and_cache_miss_populates(self):
         class Cache:
@@ -116,6 +166,7 @@ class IterativeResolverSpecificationTests(unittest.TestCase):
             result = resolve_client_question(question(), ["198.41.0.4"], 1, hit_cache)
         resolve.assert_not_called()
         self.assertEqual(result["answers"][0].rdata, "192.0.2.1")
+        self.assertEqual(result["aa"], 0)
 
         miss_cache = Cache()
         positive = {"answers": [rr("www.example.com.", 1, "192.0.2.2")], "authorities": [], "additional": [], "rcode": 0, "aa": 1}
