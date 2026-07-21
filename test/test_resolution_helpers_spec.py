@@ -76,6 +76,16 @@ class ResolutionHelperSpecificationTests(unittest.TestCase):
         with self.assertRaises(ResolutionLimitError):
             extract_cname_chain_and_final_answers(message(answers=records), q)
 
+    def test_conflicting_cname_targets_are_rejected(self):
+        q = question("a.example.")
+        records = [
+            rr("a.example.", 5, "b.example."),
+            rr("a.example.", 5, "c.example."),
+        ]
+
+        with self.assertRaises(ValueError):
+            extract_cname_chain_and_final_answers(message(answers=records), q)
+
 
 if __name__ == "__main__":
     unittest.main()

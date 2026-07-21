@@ -51,6 +51,41 @@ class RootHintsSpecificationTests(unittest.TestCase):
         ns, addresses, mapping = self.parse(". IN NS a.root.\na.root. IN A 192.0.2.1\n")
         self.assertIsNone(build_root_hints_response(DNSQuestion("example.com.", 1, 1), ns, addresses, mapping))
 
+    def test_omitted_ttl_defaults_to_zero_then_tracks_latest_directive(self):
+        ns, addresses, _mapping = self.parse(
+            ". IN NS a.root.\n"
+            "$TTL 60\n"
+            "a.root. IN A 192.0.2.1\n"
+            "$TTL 120\n"
+            "a.root. IN A 192.0.2.2\n"
+        )
+        self.assertEqual(ns[0].ttl, 0)
+        self.assertEqual([record.ttl for record in addresses], [60, 120])
+
+    def test_local_records_preserve_owner_ttl_and_class(self):
+        ns, addresses, mapping = self.parse(
+            ". 111 IN NS A.Root.\nA.Root. 222 IN A 192.0.2.1\n"
+        )
+        result = build_root_hints_response(
+            DNSQuestion(".", 2, 1),
+            ns,
+            addresses,
+            mapping,
+        )
+
+        self.assertEqual(
+            (result["answers"][0].name, result["answers"][0].ttl, result["answers"][0].rclass),
+            (".", 111, 1),
+        )
+        self.assertEqual(
+            (
+                result["additional"][0].name,
+                result["additional"][0].ttl,
+                result["additional"][0].rclass,
+            ),
+            ("A.Root.", 222, 1),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

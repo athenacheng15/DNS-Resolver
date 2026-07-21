@@ -1,9 +1,15 @@
+import socket
+import struct
 import unittest
 from unittest.mock import patch
 
-from dns.encoder import encode_dns_response
+from dns.encoder import encode_dns_response, encode_header, encode_question
 from resolver_core.models import ResolutionBudget
-from resolver_core.upstream import query_upstream_candidate, validate_upstream_response
+from resolver_core.upstream import (
+    query_upstream_candidate,
+    query_upstream_server,
+    validate_upstream_response,
+)
 from test.helpers import header, message, question
 
 
@@ -33,6 +39,137 @@ class UpstreamSpecificationTests(unittest.TestCase):
         for args in cases:
             with self.subTest(args=args[1:]), self.assertRaises(ValueError):
                 validate_upstream_response(*args)
+
+    def test_qr_opcode_qdcount_qtype_and_qclass_are_validated(self):
+        expected = question("www.example.com.", 1, 1)
+        cases = [
+            self.response(flags=0x0000),
+            self.response(flags=0x8800),
+            self.response(question("www.example.com.", 15, 1)),
+            self.response(question("www.example.com.", 1, 3)),
+        ]
+
+        qdcount_zero = bytearray(self.response())
+        qdcount_zero[4:6] = b"\x00\x00"
+        cases.append(bytes(qdcount_zero))
+
+        for wire in cases:
+            with self.subTest(wire=wire), self.assertRaises(ValueError):
+                validate_upstream_response(
+                    wire,
+                    ("192.0.2.53", 53),
+                    "192.0.2.53",
+                    0x1111,
+                    expected,
+                )
+
+    def test_malformed_section_count_and_rdlength_are_rejected(self):
+        malformed_count = bytearray(self.response())
+        malformed_count[6:8] = b"\x00\x01"
+
+        q = question()
+        malformed_rdlength = (
+            encode_header(0x1111, 0x8400, 1, 1, 0, 0)
+            + encode_question(q)
+            + b"\xc0\x0c"
+            + struct.pack("!HHIH", 1, 1, 60, 4)
+            + b"\x7f\x00"
+        )
+
+        for wire in (bytes(malformed_count), malformed_rdlength):
+            with self.subTest(wire=wire), self.assertRaises(ValueError):
+                validate_upstream_response(
+                    wire,
+                    ("192.0.2.53", 53),
+                    "192.0.2.53",
+                    0x1111,
+                    q,
+                )
+
+    def test_socket_ignores_unmatched_datagram_then_accepts_match(self):
+        class FakeSocket:
+            def __init__(self, packets):
+                self.packets = iter(packets)
+                self.sent = []
+                self.timeouts = []
+                self.closed = False
+
+            def sendto(self, data, address):
+                self.sent.append((data, address))
+
+            def settimeout(self, timeout):
+                self.timeouts.append(timeout)
+
+            def recvfrom(self, _size):
+                return next(self.packets)
+
+            def close(self):
+                self.closed = True
+
+        q = question()
+        wrong = self.response(transaction_id=0x2222)
+        valid = self.response(transaction_id=0x1111, flags=0x8400)
+        fake = FakeSocket(
+            [
+                (wrong, ("192.0.2.53", 53)),
+                (valid, ("192.0.2.53", 53)),
+            ]
+        )
+
+        with patch(
+            "resolver_core.upstream.socket.socket",
+            return_value=fake,
+        ), patch(
+            "resolver_core.upstream.encode_upstream_query",
+            return_value=(0x1111, b"query"),
+        ):
+            result = query_upstream_server(
+                "192.0.2.53",
+                q,
+                1,
+                ResolutionBudget(1),
+            )
+
+        self.assertEqual(fake.sent, [(b"query", ("192.0.2.53", 53))])
+        self.assertEqual(result["message"].header.aa, 1)
+        self.assertGreaterEqual(len(fake.timeouts), 2)
+        self.assertTrue(fake.closed)
+
+    def test_socket_timeout_returns_none_and_closes_socket(self):
+        class TimeoutSocket:
+            def __init__(self):
+                self.closed = False
+
+            def sendto(self, _data, _address):
+                pass
+
+            def settimeout(self, _timeout):
+                pass
+
+            def recvfrom(self, _size):
+                raise socket.timeout
+
+            def close(self):
+                self.closed = True
+
+        fake = TimeoutSocket()
+
+        with patch(
+            "resolver_core.upstream.socket.socket",
+            return_value=fake,
+        ), patch(
+            "resolver_core.upstream.encode_upstream_query",
+            return_value=(0x1111, b"query"),
+        ):
+            result = query_upstream_server(
+                "192.0.2.53",
+                question(),
+                1,
+                ResolutionBudget(1),
+            )
+
+        self.assertIsNone(result)
+        self.assertTrue(fake.closed)
 
     def test_candidates_are_tried_in_order_after_failure(self):
         budget = ResolutionBudget(1)
@@ -97,6 +234,25 @@ class UpstreamSpecificationTests(unittest.TestCase):
 
         self.assertIs(result, authoritative_nxdomain)
         self.assertEqual(query.call_count, 2)
+
+    def test_error_rcodes_retry_next_candidate(self):
+        for rcode in (1, 2, 5):
+            failed = {"message": message(flags=0x8000 | rcode)}
+            usable = {"message": message(flags=0x8400)}
+
+            with self.subTest(rcode=rcode), patch(
+                "resolver_core.upstream.query_upstream_server",
+                side_effect=[failed, usable],
+            ) as query:
+                result = query_upstream_candidate(
+                    ["192.0.2.1", "192.0.2.2"],
+                    question(),
+                    1,
+                    ResolutionBudget(1),
+                )
+
+            self.assertIs(result, usable)
+            self.assertEqual(query.call_count, 2)
 
     def test_semantically_unusable_response_retries_next_candidate(self):
         responses = [
