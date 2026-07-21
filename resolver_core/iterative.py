@@ -44,8 +44,16 @@ def is_usable_upstream_response(message, question):
     return is_referral_response(message, question)
 
 
-def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
-    for ns_record in ns_records:
+def resolve_next_name_server_addresses(
+    ns_records,
+    start_index,
+    root_server_ips,
+    timeout,
+    budget,
+):
+    """Resolve the next referred NS name with usable IPv4 addresses."""
+    for index in range(start_index, len(ns_records)):
+        ns_record = ns_records[index]
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
 
         # Starting a no-glue nested NS hostname lookup consumes
@@ -68,9 +76,10 @@ def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
         addresses = get_complete_a_addresses(ns_record.rdata, nested_result["answers"])
 
         if addresses:
-            return addresses
+            return addresses, index + 1
 
-    return []
+    return [], len(ns_records)
+
 
 def iterative_resolve(question, root_server_ips, timeout, budget):
 
@@ -85,6 +94,8 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
     cname_chain = []
     visited_cname_names = {normalize_name(question.qname)}
     uses_multiple_answer_responses = False
+    pending_ns_records = []
+    pending_ns_index = 0
 
     while candidate_ips:
         budget.ensure_time_remaining()
@@ -101,9 +112,23 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         )
 
         if upstream_result is None:
+            if pending_ns_index < len(pending_ns_records):
+                candidate_ips, pending_ns_index = resolve_next_name_server_addresses(
+                    pending_ns_records,
+                    pending_ns_index,
+                    root_server_ips,
+                    timeout,
+                    budget,
+                )
+
+                if candidate_ips:
+                    continue
+
             return None
 
         message = upstream_result["message"]
+        pending_ns_records = []
+        pending_ns_index = 0
         client_response_aa = (
             0 if uses_multiple_answer_responses else message.header.aa
         )
@@ -220,14 +245,20 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         else:
             # Resolve NS hostnames from the root when no glue is available.
             budget.ensure_time_remaining()
-            candidate_ips = resolve_name_server_addresses(
-                ns_records, root_server_ips, timeout, budget
+            pending_ns_records = ns_records
+            candidate_ips, pending_ns_index = resolve_next_name_server_addresses(
+                pending_ns_records,
+                0,
+                root_server_ips,
+                timeout,
+                budget,
             )
 
         if not candidate_ips:
             return None
 
     return None
+
 
 def resolve_client_question(question, root_server_ips, timeout, cache):
     """
