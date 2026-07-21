@@ -60,6 +60,29 @@ class CacheSpecificationTests(unittest.TestCase):
             thread.join()
         self.assertEqual(errors, [])
 
+    def test_type_and_class_are_distinct_cache_keys(self):
+        cache = DNSCache()
+        with patch("cache.time.monotonic", return_value=10.0):
+            cache.put(
+                question("example.", 1, 1),
+                [rr("example.", 1, "192.0.2.1", ttl=30)],
+            )
+
+        with patch("cache.time.monotonic", return_value=11.0):
+            self.assertIsNone(cache.get(question("example.", 15, 1)))
+            self.assertIsNone(cache.get(question("example.", 1, 3)))
+
+    def test_zero_ttl_record_prevents_partial_cache_entry(self):
+        cache = DNSCache()
+        cache.put(
+            question("alias.example."),
+            [
+                rr("alias.example.", 5, "target.example.", ttl=30),
+                rr("target.example.", 1, "192.0.2.1", ttl=0),
+            ],
+        )
+        self.assertIsNone(cache.get(question("alias.example.")))
+
 
 if __name__ == "__main__":
     unittest.main()

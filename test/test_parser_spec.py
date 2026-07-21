@@ -2,9 +2,10 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 
-from dns.encoder import encode_name
+from dns.encoder import encode_header, encode_name
 from dns.message import parse_dns_message, parse_name
 from test.helpers import wire_message, wire_question, wire_rr
 
@@ -74,6 +75,46 @@ class ParserSpecificationTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 parse_name(data, 0)
 
+    def test_more_than_twenty_pointer_jumps_is_rejected(self):
+        data = bytearray()
+        for index in range(21):
+            target = (index + 1) * 2
+            data.extend(struct.pack("!H", 0xC000 | target))
+        data.append(0)
+
+        with self.assertRaises(ValueError):
+            parse_name(bytes(data), 0)
+
+    def test_compression_in_all_name_bearing_rdata_types(self):
+        q = wire_question("example.com.")
+        owner = b"\xc0\x0c"
+        records = [
+            wire_rr(owner, 2, b"\xc0\x0c"),
+            wire_rr(owner, 5, b"\xc0\x0c"),
+            wire_rr(owner, 12, b"\xc0\x0c"),
+            wire_rr(owner, 15, struct.pack("!H", 10) + b"\xc0\x0c"),
+        ]
+        parsed = parse_dns_message(wire_message(questions=[q], answers=records))
+
+        self.assertEqual(parsed.answers[0].rdata, "example.com.")
+        self.assertEqual(parsed.answers[1].rdata, "example.com.")
+        self.assertEqual(parsed.answers[2].rdata, "example.com.")
+        self.assertEqual(
+            parsed.answers[3].rdata,
+            {"preference": 10, "exchange": "example.com."},
+        )
+
+    def test_unsigned_maximum_ttl_is_preserved(self):
+        q = wire_question("example.com.")
+        record = wire_rr(
+            b"\xc0\x0c",
+            1,
+            bytes([192, 0, 2, 1]),
+            ttl=0xFFFFFFFF,
+        )
+        parsed = parse_dns_message(wire_message(questions=[q], answers=[record]))
+        self.assertEqual(parsed.answers[0].ttl, 0xFFFFFFFF)
+
     def test_name_length_constraints(self):
         with self.assertRaises(ValueError):
             parse_name(bytes([64]) + b"a" * 64 + b"\0", 0)
@@ -117,6 +158,42 @@ class ParserSpecificationTests(unittest.TestCase):
             self.assertIn(heading, result.stdout)
         for field in ("QR:", "Opcode:", "AA:", "TC:", "RD:", "RA:", "RCODE:"):
             self.assertIn(field, result.stdout)
+
+    def test_parser_cli_prints_unknown_type_metadata(self):
+        q = wire_question("example.com.")
+        unknown = wire_rr(b"\xc0\x0c", 99, b"\xde\xad", ttl=123)
+        wire = wire_message(questions=[q], answers=[unknown])
+
+        with tempfile.NamedTemporaryFile() as stream:
+            stream.write(wire)
+            stream.flush()
+            result = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "parser.py"), stream.name],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for value in ("example.com.", "123", "IN", "TYPE99", "RDLENGTH 2"):
+            self.assertIn(value, result.stdout)
+
+    def test_parser_cli_malformed_name_fails_without_traceback(self):
+        wire = encode_header(0x1234, 0, 1, 0, 0, 0) + b"\xc0\xff"
+
+        with tempfile.NamedTemporaryFile() as stream:
+            stream.write(wire)
+            stream.flush()
+            result = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "parser.py"), stream.name],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Error parsing DNS message", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ from dns.encoder import (
     encode_upstream_query,
 )
 from dns.message import parse_dns_message
-from resolver import encode_client_response_safely
+from resolver import build_client_response, encode_client_response_safely
+from resolver_core.helpers import make_resolution_result
 from resolver_core.constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from test.helpers import header, question, rr
 
@@ -136,6 +137,21 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
                 question(maximum_name),
                 [rr(too_long_name, 1, "192.0.2.1")],
             )
+
+    def test_unsupported_upstream_records_are_not_copied_to_client(self):
+        unsupported = rr("example.", 41, {"status": "unsupported", "raw": b""})
+        result = make_resolution_result(
+            answers=[rr("example.", 1, "192.0.2.1"), unsupported],
+            authorities=[unsupported],
+            additional=[unsupported],
+            aa=1,
+        )
+        wire = build_client_response(header(), question("example."), result)
+        parsed = parse_dns_message(wire)
+
+        self.assertEqual(parsed.header.ancount, 1)
+        self.assertEqual(parsed.answers[0].rtype, 1)
+        self.assertEqual((parsed.header.nscount, parsed.header.arcount), (0, 0))
 
 
 if __name__ == "__main__":
