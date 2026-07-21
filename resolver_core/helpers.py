@@ -108,7 +108,7 @@ def extract_cname_chain_and_final_answers(message, question):
             if normalize_name(record.rdata) != target_name:
                 raise ValueError("Conflicting CNAME targets")
 
-        if len(cname_chain) > MAX_CNAME_RECORDS:
+        if len(cname_chain) + len(cname_records) > MAX_CNAME_RECORDS:
             raise ResolutionLimitError("CNAME chain limit reached")
 
         if target_name in visited_names:
