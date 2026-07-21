@@ -21,10 +21,10 @@ def is_retryable_upstream_response(message):
     NXDOMAIN may be terminal when authoritative, so it must be examined by
     iterative_resolve().
     """
-    return message.header.rcode not in (
-        RCODE_NOERROR,
-        RCODE_NXDOMAIN,
-    )
+    if message.header.rcode == RCODE_NXDOMAIN:
+        return message.header.aa != 1
+
+    return message.header.rcode != RCODE_NOERROR
 
 def validate_upstream_response(
     response_data,
@@ -123,7 +123,13 @@ def query_upstream_server(server_ip, question, timeout, budget):
     finally:
         upstream_socket.close()
 
-def query_upstream_candidate(server_ips, question, timeout, budget):
+def query_upstream_candidate(
+    server_ips,
+    question,
+    timeout,
+    budget,
+    accept_response=None,
+):
     """
     Query candidate upstream servers sequentially.
 
@@ -141,6 +147,15 @@ def query_upstream_candidate(server_ips, question, timeout, budget):
 
         if is_retryable_upstream_response(result["message"]):
             continue
+
+        if accept_response is not None:
+            try:
+                if not accept_response(result["message"]):
+                    continue
+            except ValueError:
+                # A semantically malformed response only fails this
+                # candidate; another server may still provide a usable one.
+                continue
 
         return result
 

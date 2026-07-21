@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from resolver_core.iterative import iterative_resolve, resolve_client_question
+from resolver_core.iterative import (
+    is_usable_upstream_response,
+    iterative_resolve,
+    resolve_client_question,
+)
 from resolver_core.models import ResolutionBudget, ResolutionLimitError
 from test.helpers import message, question, rr
 
@@ -11,6 +15,54 @@ def upstream(msg):
 
 
 class IterativeResolverSpecificationTests(unittest.TestCase):
+    def test_only_terminal_or_referral_responses_are_usable(self):
+        q = question()
+        cases = [
+            (message(flags=0x8403), True),
+            (message(flags=0x8003), False),
+            (message(flags=0x8400), True),
+            (
+                message(
+                    flags=0x8400,
+                    answers=[rr("www.example.com.", 1, "192.0.2.80")],
+                ),
+                True,
+            ),
+            (
+                message(
+                    answers=[rr("www.example.com.", 1, "192.0.2.80")],
+                ),
+                False,
+            ),
+            (
+                message(
+                    flags=0x8400,
+                    answers=[rr("www.example.com.", 5, "target.example.com.")],
+                ),
+                True,
+            ),
+            (
+                message(
+                    answers=[rr("www.example.com.", 5, "target.example.com.")],
+                ),
+                False,
+            ),
+            (
+                message(
+                    authority=[rr("example.com.", 2, "ns.example.com.")],
+                ),
+                True,
+            ),
+            (message(), False),
+        ]
+
+        for response, expected in cases:
+            with self.subTest(flags=response.header.flags):
+                self.assertEqual(
+                    is_usable_upstream_response(response, q),
+                    expected,
+                )
+
     def test_referral_with_glue_then_authoritative_answer(self):
         referral = message(
             authority=[rr("example.com.", 2, "ns.example.com.")],

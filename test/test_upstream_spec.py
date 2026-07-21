@@ -4,7 +4,7 @@ from unittest.mock import patch
 from dns.encoder import encode_dns_response
 from resolver_core.models import ResolutionBudget
 from resolver_core.upstream import query_upstream_candidate, validate_upstream_response
-from test.helpers import header, question
+from test.helpers import header, message, question
 
 
 class UpstreamSpecificationTests(unittest.TestCase):
@@ -42,6 +42,70 @@ class UpstreamSpecificationTests(unittest.TestCase):
         self.assertIs(result, usable)
         self.assertEqual([call.args[0] for call in query.call_args_list], ["192.0.2.1", "192.0.2.2"])
         self.assertEqual(budget.outbound_attempts, 2)
+
+    def test_non_authoritative_nxdomain_retries_next_candidate(self):
+        non_authoritative_nxdomain = {"message": message(flags=0x8003)}
+        authoritative_nxdomain = {"message": message(flags=0x8403)}
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=[non_authoritative_nxdomain, authoritative_nxdomain],
+        ) as query:
+            result = query_upstream_candidate(
+                ["192.0.2.1", "192.0.2.2"],
+                question(),
+                1,
+                ResolutionBudget(1),
+            )
+
+        self.assertIs(result, authoritative_nxdomain)
+        self.assertEqual(query.call_count, 2)
+
+    def test_semantically_unusable_response_retries_next_candidate(self):
+        responses = [
+            {"message": message()},
+            {"message": message()},
+            {"message": message()},
+        ]
+        decisions = iter([False, ValueError("malformed response"), True])
+
+        def accept_response(_message):
+            decision = next(decisions)
+            if isinstance(decision, Exception):
+                raise decision
+            return decision
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=responses,
+        ) as query:
+            result = query_upstream_candidate(
+                ["192.0.2.1", "192.0.2.2", "192.0.2.3"],
+                question(),
+                1,
+                ResolutionBudget(1),
+                accept_response=accept_response,
+            )
+
+        self.assertIs(result, responses[2])
+        self.assertEqual(query.call_count, 3)
+
+    def test_all_semantically_unusable_candidates_return_none(self):
+        responses = [{"message": message()}, {"message": message()}]
+
+        with patch(
+            "resolver_core.upstream.query_upstream_server",
+            side_effect=responses,
+        ):
+            result = query_upstream_candidate(
+                ["192.0.2.1", "192.0.2.2"],
+                question(),
+                1,
+                ResolutionBudget(1),
+                accept_response=lambda _message: False,
+            )
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

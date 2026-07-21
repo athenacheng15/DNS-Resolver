@@ -22,6 +22,28 @@ from resolver_core.upstream import query_upstream_candidate
 from utils import normalize_name
 
 
+def is_usable_upstream_response(message, question):
+    """Return whether a response can advance or finish this lookup."""
+    if message.header.rcode == RCODE_NXDOMAIN:
+        return message.header.aa == 1
+
+    if message.header.rcode != RCODE_NOERROR:
+        return False
+
+    response_cnames, final_answers, _ = extract_cname_chain_and_final_answers(
+        message,
+        question,
+    )
+
+    if message.header.aa == 1:
+        return bool(response_cnames or final_answers) or is_authoritative_nodata_response(
+            message,
+            question,
+        )
+
+    return is_referral_response(message, question)
+
+
 def resolve_name_server_addresses(ns_records, root_server_ips, timeout, budget):
     for ns_record in ns_records:
         ns_question = DNSQuestion(qname=ns_record.rdata, qtype=TYPE_A, qclass=CLASS_IN)
@@ -68,7 +90,14 @@ def iterative_resolve(question, root_server_ips, timeout, budget):
         budget.ensure_time_remaining()
 
         upstream_result = query_upstream_candidate(
-            candidate_ips, current_question, timeout, budget
+            candidate_ips,
+            current_question,
+            timeout,
+            budget,
+            accept_response=lambda message: is_usable_upstream_response(
+                message,
+                current_question,
+            ),
         )
 
         if upstream_result is None:
