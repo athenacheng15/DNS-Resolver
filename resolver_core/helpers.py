@@ -11,6 +11,9 @@ from resolver_core.models import ResolutionLimitError
 from utils import normalize_name
 
 
+# DNS name and question matching
+
+
 def is_supported_client_question(question):
     return question.qtype in SUPPORTED_RECORD_TYPES
 
@@ -46,29 +49,31 @@ def zone_label_count(zone):
     return len(zone.rstrip(".").split("."))
 
 
+# CNAME and answer handling
+
+
 def find_requested_answer(message, question):
-    answers = []
-    for record in message.answers:
+    return [
+        record
+        for record in message.answers
         if (
             record.rclass == question.qclass
             and record.rtype == question.qtype
             and record_name_matches(record.name, question.qname)
-        ):
-            answers.append(record)
-    return answers
+        )
+    ]
 
 
 def find_cname_answer(message, expected_name, expected_class):
-    cname_records = []
-
-    for record in message.answers:
+    return [
+        record
+        for record in message.answers
         if (
             record.rclass == expected_class
             and record.rtype == TYPE_CNAME
             and record_name_matches(record.name, expected_name)
-        ):
-            cname_records.append(record)
-    return cname_records
+        )
+    ]
 
 
 def extract_cname_chain_and_final_answers(message, question):
@@ -120,15 +125,7 @@ def extract_cname_chain_and_final_answers(message, question):
 
 
 def has_complete_positive_answer(question, records):
-    """
-    Return True when records form a complete positive answer for question.
-
-    For a direct CNAME query, the answer must contain a CNAME RRset whose
-    owner is the original QNAME.
-
-    For A, NS, MX, or PTR, the records may contain a CNAME chain, but that
-    chain must eventually reach at least one record of the requested type.
-    """
+    # Return True when records form a complete positive answer for question.
 
     current_name = normalize_name(question.qname)
     visited_names = {current_name}
@@ -188,13 +185,8 @@ def has_complete_positive_answer(question, records):
 
 
 def get_complete_a_addresses(original_name, records):
-    """
-    Follow a complete CNAME chain starting at original_name and return
-    the IPv4 addresses belonging to the final canonical name.
-
-    Return an empty list when the chain is incomplete, conflicting,
-    looping, too long, or has no final A records.
-    """
+    # Follow a complete CNAME chain starting at original_name
+    # return the IPv4 addresses belonging to the final canonical name.
     current_name = normalize_name(original_name)
     visited_names = {current_name}
     cname_count = 0
@@ -249,6 +241,9 @@ def get_complete_a_addresses(original_name, records):
 
         visited_names.add(target_name)
         current_name = target_name
+
+
+# Referral and glue handling
 
 
 def get_referral_records(message, question):
@@ -320,13 +315,10 @@ def is_referral_response(message, question):
     return bool(get_referral_records(message, question))
 
 
-def filter_encodable_records(records):
-    """
-    Keep only resource records that the response encoder can safely encode.
+# Resolution result and root hints
 
-    Record order is preserved. Unsupported records such as SOA, AAAA,
-    TXT, and OPT are excluded from client-facing responses.
-    """
+
+def filter_encodable_records(records):
     return [record for record in records if record.rtype in SUPPORTED_RECORD_TYPES]
 
 
@@ -354,8 +346,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
         answers = list(root_ns_records)
         additional = []
 
-        # For every returned NS record, find its matching A glue records.
-        # The nested loop preserves: NS record order, A record file order.
+        # For every returned NS record, find its matching A glue records in order.
         for ns_record in root_ns_records:
             ns_name = normalize_name(ns_record.rdata)
 
@@ -365,25 +356,17 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
                 if a_name == ns_name:
                     additional.append(a_record)
 
-        return {
-            "answers": answers,
-            "authorities": [],
-            "additional": additional,
-            "rcode": 0,
-            "aa": 0,
-        }
+        return make_resolution_result(
+            answers=answers,
+            additional=additional,
+        )
 
-    # Query: a.root-servers.net. A, b.root-servers.net. A, etc.
     if question.qtype == TYPE_A:
         answers = root_a_map.get(qname, [])
         if answers:
-            return {
-                "answers": list(answers),
-                "authorities": [],
-                "additional": [],
-                "rcode": 0,
-                "aa": 0,
-            }
+            return make_resolution_result(
+                answers=list(answers),
+            )
 
     # This query cannot be answered using named.root.
     return None
