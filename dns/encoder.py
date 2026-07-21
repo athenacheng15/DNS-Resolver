@@ -1,5 +1,7 @@
 import socket, struct, secrets
 
+from constants import RCODE_NOERROR, TYPE_A, TYPE_CNAME, TYPE_MX, TYPE_NS, TYPE_PTR
+
 # Helper functions
 # ! for network byte order, H for 16-bit unsigned integer, I for 32-bit unsigned integer
 
@@ -99,15 +101,15 @@ def _write_mx_rdata(message, rdata, name_offsets=None):
 
 
 def _write_rdata(message, record, name_offsets=None):
-    if record.rtype == 1:
+    if record.rtype == TYPE_A:
         message.extend(encode_a_rdata(record.rdata))
         return
 
-    if record.rtype in (2, 5, 12):
+    if record.rtype in (TYPE_NS, TYPE_CNAME, TYPE_PTR):
         _write_name(message, record.rdata, name_offsets)
         return
 
-    if record.rtype == 15:
+    if record.rtype == TYPE_MX:
         _write_mx_rdata(message, record.rdata, name_offsets)
         return
 
@@ -183,7 +185,7 @@ def build_upstream_query_flags():
     return 0
 
 
-def build_response_flags(query_header, rcode=0, aa=0):
+def build_response_flags(query_header, rcode=RCODE_NOERROR, aa=0):
     flags = 0
 
     flags |= 1 << 15  # | for bitwise OR
@@ -220,7 +222,7 @@ def encode_dns_response(
     answers=None,
     authorities=None,
     additional=None,
-    rcode=0,
+    rcode=RCODE_NOERROR,
     aa=0,
 ):
     answers = [] if answers is None else answers

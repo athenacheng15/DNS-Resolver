@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from dns.encoder import (
     encode_dns_response,
     encode_question,
@@ -10,7 +11,6 @@ from dns.encoder import (
 from dns.message import parse_dns_message
 from resolver import build_client_response, encode_client_response
 from resolver_core.helpers import make_resolution_result
-from resolver_core.constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from test.helpers import header, question, rr
 
 

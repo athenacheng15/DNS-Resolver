@@ -1,6 +1,6 @@
 import time
 
-from resolver_core.constants import (
+from constants import (
     MAX_OUTBOUND_ATTEMPTS,
     MAX_REFERRAL_LEVELS,
     MAX_RESOLUTION_SECONDS,

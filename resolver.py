@@ -3,14 +3,14 @@ import sys
 import threading
 
 from cache import DNSCache
-from dns.encoder import encode_dns_response
-from dns.message import parse_header, parse_questions
-from resolver_core.constants import (
+from constants import (
     MAX_CLIENT_DNS_RESPONSE_SIZE,
     MAX_RECEIVED_DNS_MESSAGE_SIZE,
     RCODE_NOERROR,
     RCODE_SERVFAIL,
 )
+from dns.encoder import encode_dns_response
+from dns.message import parse_header, parse_questions
 from resolver_core.helpers import (
     build_root_hints_response,
     filter_encodable_records,

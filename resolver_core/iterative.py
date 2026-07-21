@@ -1,5 +1,4 @@
-from dns.records import DNSQuestion
-from resolver_core.constants import (
+from constants import (
     CLASS_IN,
     MAX_CNAME_RECORDS,
     RCODE_NOERROR,
@@ -7,6 +6,7 @@ from resolver_core.constants import (
     TYPE_A,
     TYPE_CNAME,
 )
+from dns.records import DNSQuestion
 from resolver_core.helpers import (
     extract_cname_chain_and_final_answers,
     get_complete_a_addresses,

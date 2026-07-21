@@ -1,14 +1,12 @@
+from constants import (
+    CLASS_IN,
+    CLASS_NAME_TO_NUM,
+    TYPE_A,
+    TYPE_NAME_TO_NUM,
+    TYPE_NS,
+)
 from dns.records import ResourceRecord
 from utils import normalize_name
-
-TYPE_NAME_TO_NUM = {
-    "A": 1,
-    "NS": 2,
-}
-
-CLASS_NAME_TO_NUM = {
-    "IN": 1,
-}
 
 
 def strip_comments(line):
@@ -39,9 +37,9 @@ def parse_root_hints(filename):
             if record is None:
                 continue
 
-            if record.rtype == 2:
+            if record.rtype == TYPE_NS:
                 root_ns_records.append(record)
-            elif record.rtype == 1:
+            elif record.rtype == TYPE_A:
                 root_a_records.append(record)
                 key = normalize_name(record.name)
 
@@ -56,7 +54,7 @@ def parse_root_hints(filename):
 def parse_root_hints_line(parts, current_ttl):
     owner = parts[0]
     ttl = None
-    rclass = 1
+    rclass = CLASS_IN
     rtype = None
     rdata = None
 
@@ -84,7 +82,7 @@ def parse_root_hints_line(parts, current_ttl):
     if rtype is None:
         return None
 
-    if rtype not in (1, 2):
+    if rtype not in (TYPE_A, TYPE_NS):
         return None
 
     if ttl is None:

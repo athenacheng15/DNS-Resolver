@@ -1,14 +1,14 @@
 import socket
 import time
 
-from dns.encoder import encode_upstream_query
-from dns.message import parse_dns_message
-from resolver_core.constants import (
+from constants import (
     MAX_RECEIVED_DNS_MESSAGE_SIZE,
     RCODE_NOERROR,
     RCODE_NXDOMAIN,
     UPSTREAM_DNS_PORT,
 )
+from dns.encoder import encode_upstream_query
+from dns.message import parse_dns_message
 from resolver_core.helpers import question_match
 
 

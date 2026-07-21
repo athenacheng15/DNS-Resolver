@@ -1,9 +1,8 @@
-from resolver_core.constants import (
+from constants import (
     CLASS_IN,
-    ENCODABLE_RECORD_TYPES,
     MAX_CNAME_RECORDS,
     RCODE_NOERROR,
-    SUPPORTED_QUERY_TYPES,
+    SUPPORTED_RECORD_TYPES,
     TYPE_A,
     TYPE_CNAME,
     TYPE_NS,
@@ -13,7 +12,7 @@ from utils import normalize_name
 
 
 def is_supported_client_question(question):
-    return question.qtype in SUPPORTED_QUERY_TYPES
+    return question.qtype in SUPPORTED_RECORD_TYPES
 
 
 def question_match(actual_question, expected_question):
@@ -328,7 +327,7 @@ def filter_encodable_records(records):
     Record order is preserved. Unsupported records such as SOA, AAAA,
     TXT, and OPT are excluded from client-facing responses.
     """
-    return [record for record in records if record.rtype in ENCODABLE_RECORD_TYPES]
+    return [record for record in records if record.rtype in SUPPORTED_RECORD_TYPES]
 
 
 def make_resolution_result(
@@ -347,11 +346,11 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
     qname = normalize_name(question.qname)
 
     # Root hints only contains IN records
-    if question.qclass != 1:
+    if question.qclass != CLASS_IN:
         return None
 
     # Query: .NS
-    if qname == "." and question.qtype == 2:
+    if qname == "." and question.qtype == TYPE_NS:
         answers = list(root_ns_records)
         additional = []
 
@@ -375,7 +374,7 @@ def build_root_hints_response(question, root_ns_records, root_a_records, root_a_
         }
 
     # Query: a.root-servers.net. A, b.root-servers.net. A, etc.
-    if question.qtype == 1:
+    if question.qtype == TYPE_A:
         answers = root_a_map.get(qname, [])
         if answers:
             return {
