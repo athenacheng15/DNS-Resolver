@@ -77,9 +77,37 @@ class ParserSpecificationTests(unittest.TestCase):
     def test_name_length_constraints(self):
         with self.assertRaises(ValueError):
             parse_name(bytes([64]) + b"a" * 64 + b"\0", 0)
-        too_long = b"".join(bytes([63]) + b"a" * 63 for _ in range(4)) + b"\0"
+
+        maximum_length = (
+            b"".join(bytes([63]) + b"a" * 63 for _ in range(3))
+            + bytes([61])
+            + b"a" * 61
+            + b"\0"
+        )
+        too_long = (
+            b"".join(bytes([63]) + b"a" * 63 for _ in range(3))
+            + bytes([62])
+            + b"a" * 62
+            + b"\0"
+        )
+
+        self.assertEqual(len(maximum_length), 255)
+        self.assertEqual(parse_name(maximum_length, 0)[1], 255)
+
+        self.assertEqual(len(too_long), 256)
         with self.assertRaises(ValueError):
             parse_name(too_long, 0)
+
+        compressed_too_long = maximum_length + b"\x01x\xc0\x00"
+        with self.assertRaises(ValueError):
+            parse_name(compressed_too_long, len(maximum_length))
+
+        maximum_name = ".".join(["a" * 63] * 3 + ["a" * 61]) + "."
+        too_long_name = ".".join(["a" * 63] * 3 + ["a" * 62]) + "."
+
+        self.assertEqual(len(encode_name(maximum_name)), 255)
+        with self.assertRaises(ValueError):
+            encode_name(too_long_name)
 
     def test_parser_cli_prints_required_sections_and_exits(self):
         path = os.path.join(ROOT, "src", "unsw.edu.au-A-44325-query.bin")

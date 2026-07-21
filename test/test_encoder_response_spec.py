@@ -126,6 +126,17 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
             (0, 0, 0),
         )
 
+    def test_compression_rejects_name_longer_than_255_bytes_when_expanded(self):
+        maximum_name = ".".join(["a" * 63] * 3 + ["a" * 61]) + "."
+        too_long_name = "x." + maximum_name
+
+        with self.assertRaises(ValueError):
+            encode_dns_response(
+                header(),
+                question(maximum_name),
+                [rr(too_long_name, 1, "192.0.2.1")],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

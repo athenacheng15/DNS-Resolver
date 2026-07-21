@@ -101,8 +101,22 @@ def _append_name(message, name, name_offsets=None):
         return
 
     labels = name.rstrip(".").split(".")
+    encoded_labels = []
+    total_length = 1  # Include the final zero-length root label.
 
-    for index, label in enumerate(labels):
+    for label in labels:
+        label_bytes = label.encode("ascii")
+
+        if len(label_bytes) > 63:
+            raise ValueError(f"DNS label is longer than 63 bytes: {label}")
+
+        total_length += len(label_bytes) + 1
+        if total_length > 255:
+            raise ValueError("DNS name is longer than 255 bytes")
+
+        encoded_labels.append(label_bytes)
+
+    for index, label_bytes in enumerate(encoded_labels):
         suffix = ".".join(labels[index:]).lower() + "."
 
         if name_offsets is not None and suffix in name_offsets:
@@ -117,11 +131,6 @@ def _append_name(message, name, name_offsets=None):
 
         if name_offsets is not None:
             name_offsets[suffix] = len(message)
-
-        label_bytes = label.encode("ascii")
-
-        if len(label_bytes) > 63:
-            raise ValueError(f"DNS label is longer than 63 bytes: {label}")
 
         message.append(len(label_bytes))
         message.extend(label_bytes)
