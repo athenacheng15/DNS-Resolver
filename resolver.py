@@ -6,7 +6,6 @@ from cache import DNSCache
 from constants import (
     MAX_CLIENT_DNS_RESPONSE_SIZE,
     MAX_RECEIVED_DNS_MESSAGE_SIZE,
-    RCODE_NOERROR,
     RCODE_SERVFAIL,
 )
 from dns.encoder import encode_dns_response
@@ -48,15 +47,23 @@ def decode_client_query(query_data):
     return header, questions
 
 
-def encode_client_response(
-    query_header,
-    question,
-    answers=None,
-    authorities=None,
-    additional=None,
-    rcode=RCODE_NOERROR,
-    aa=0,
-):
+def build_client_response(query_header, question, resolution_result):
+    # Convert the resolution result into sections that the encoder supports.
+    # A missing result represents a failed resolution.
+    if resolution_result is None:
+        answers = []
+        authorities = []
+        additional = []
+        rcode = RCODE_SERVFAIL
+        aa = 0
+    else:
+        answers = filter_encodable_records(resolution_result["answers"])
+        authorities = filter_encodable_records(resolution_result["authorities"])
+        additional = filter_encodable_records(resolution_result["additional"])
+        rcode = resolution_result["rcode"]
+        aa = resolution_result["aa"]
+
+    # Encoding errors and responses over the UDP size limit fall back to SERVFAIL.
     try:
         response = encode_dns_response(
             query_header,
@@ -85,36 +92,6 @@ def encode_client_response(
     return servfail_response
 
 
-def build_client_response(query_header, question, resolution_result):
-    """
-    Encode the final DNS response sent to the client.
-
-    A failed resolution is returned as SERVFAIL. Otherwise, the answer,
-    authority, additional, and RCODE fields come from the resolution result.
-    """
-
-    if resolution_result is None:
-        return encode_client_response(
-            query_header=query_header,
-            question=question,
-            rcode=RCODE_SERVFAIL,
-        )
-
-    answers = filter_encodable_records(resolution_result["answers"])
-    authorities = filter_encodable_records(resolution_result["authorities"])
-    additional = filter_encodable_records(resolution_result["additional"])
-
-    return encode_client_response(
-        query_header,
-        question,
-        answers,
-        authorities,
-        additional,
-        resolution_result["rcode"],
-        resolution_result["aa"],
-    )
-
-
 def handle_client_query(
     server_socket,
     query_data,
@@ -126,17 +103,10 @@ def handle_client_query(
     timeout,
     cache,
 ):
-    """
-    Process and answer one client DNS query.
-
-    This function runs inside a worker thread. All state created while
-    resolving the query is local to this invocation. The cache is the only
-    shared mutable resolver state and is protected internally by a lock.
-    """
     try:
         header, questions = decode_client_query(query_data)
 
-        # This resolver supports exactly one question per client query.
+        #  supports exactly one question per client query.
         if len(questions) != 1:
             return
 
@@ -174,12 +144,6 @@ def handle_client_query(
 def run_server(
     server_socket, root_ns_records, root_a_records, root_a_map, timeout, cache
 ):
-    """
-    Receive client DNS queries and dispatch each query to a worker thread.
-
-    The main thread returns immediately to recvfrom(), allowing multiple
-    client resolutions to overlap while workers wait for upstream replies.
-    """
 
     # Root server IPs are the starting point for iterative resolution.
     root_server_ips = get_root_server_ips(root_ns_records, root_a_records)

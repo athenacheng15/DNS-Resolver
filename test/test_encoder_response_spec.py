@@ -9,7 +9,7 @@ from dns.encoder import (
     encode_upstream_query,
 )
 from dns.message import parse_dns_message
-from resolver import build_client_response, encode_client_response
+from resolver import build_client_response
 from resolver_core.helpers import make_resolution_result
 from test.helpers import header, question, rr
 
@@ -123,7 +123,8 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
         uncompressed_size = (
             12 + len(encode_question(original_question)) + len(encode_records(answers))
         )
-        wire = encode_client_response(header(), original_question, answers)
+        result = make_resolution_result(answers=answers)
+        wire = build_client_response(header(), original_question, result)
         parsed = parse_dns_message(wire)
 
         self.assertGreater(uncompressed_size, MAX_CLIENT_DNS_RESPONSE_SIZE)
@@ -132,12 +133,11 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
         self.assertEqual(parsed.header.ancount, len(answers))
 
     def test_encoding_error_returns_servfail(self):
-        wire = encode_client_response(
-            header(),
-            question(),
+        result = make_resolution_result(
             answers=[rr("www.example.com.", 1, "not-an-ip-address")],
             aa=1,
         )
+        wire = build_client_response(header(), question(), result)
         parsed = parse_dns_message(wire)
 
         self.assertEqual(parsed.header.rcode, RCODE_SERVFAIL)
@@ -150,14 +150,13 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
             for index in range(40)
         ]
 
-        wire = encode_client_response(
-            header(),
-            question(),
-            answers,
+        result = make_resolution_result(
+            answers=answers,
             authorities=[rr("example.com.", 2, "ns.example.com.")],
             additional=[rr("ns.example.com.", 1, "192.0.2.53")],
             aa=1,
         )
+        wire = build_client_response(header(), question(), result)
         parsed = parse_dns_message(wire)
 
         self.assertLessEqual(len(wire), MAX_CLIENT_DNS_RESPONSE_SIZE)
