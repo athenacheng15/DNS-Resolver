@@ -12,34 +12,15 @@ def encode_uint32(value):
 
 
 def encode_name(name):
-    if name == ".":
-        return b"\x00"  # root label
-
-    name = name.rstrip(".")
-    labels = name.split(".")
-
-    encoded = bytearray()
-
-    for label in labels:
-        label_bytes = label.encode("ascii")
-
-        if len(label_bytes) > 63:
-            raise ValueError(f"DNS label is longer than 63 bytes: {label}")
-
-        encoded.append(len(label_bytes))
-        encoded.extend(label_bytes)
-
-    encoded.append(0)
-
-    return bytes(encoded)
+    message = bytearray()
+    _append_name(message, name)
+    return bytes(message)
 
 
 def encode_question(question):
-    return (
-        encode_name(question.qname)
-        + encode_uint16(question.qtype)
-        + encode_uint16(question.qclass)
-    )
+    message = bytearray()
+    _append_question(message, question)
+    return bytes(message)
 
 
 def encode_header(
@@ -65,47 +46,27 @@ def encode_a_rdata(address):
 
 
 def encode_mx_rdata(rdata):
-    preference = rdata["preference"]
-    exchange = rdata["exchange"]
-
-    return encode_uint16(preference) + encode_name(exchange)
+    message = bytearray()
+    _append_mx_rdata(message, rdata)
+    return bytes(message)
 
 
 def encode_rdata(record):
-    if record.rtype == 1:
-        return encode_a_rdata(record.rdata)
-
-    if record.rtype in (2, 5, 12):
-        return encode_name(record.rdata)
-
-    if record.rtype == 15:
-        return encode_mx_rdata(record.rdata)
-
-    raise ValueError(f"Unsupported DNS record type: {record.rtype}")
+    message = bytearray()
+    _append_rdata(message, record)
+    return bytes(message)
 
 
 def encode_resource_record(record):
-
-    encoded_name = encode_name(record.name)
-    encoded_rdata = encode_rdata(record)
-
-    fixed_fields = struct.pack(
-        "!HHIH",
-        record.rtype,
-        record.rclass,
-        record.ttl,
-        len(encoded_rdata),
-    )
-    # Recalculate RDLENGTH from the actual encoded RDATA because root hints records store it as 0.
-
-    return encoded_name + fixed_fields + encoded_rdata
+    message = bytearray()
+    _append_resource_record(message, record)
+    return bytes(message)
 
 
 def encode_records(records):
-    encoded = bytearray()
-    for record in records:
-        encoded.extend(encode_resource_record(record))
-    return bytes(encoded)
+    message = bytearray()
+    _append_records(message, records)
+    return bytes(message)
 
 
 def encode_upstream_query(question):
@@ -126,16 +87,16 @@ def encode_upstream_query(question):
     return transaction_id, query_data
 
 
-def encode_name_compressed(name, message, name_offsets):
+def _append_name(message, name, name_offsets=None):
     """
-    Append a DNS name to message using a pointer to an earlier suffix
-    when possible.
+    Append a DNS name, optionally compressing it against earlier suffixes.
 
-    name_offsets maps normalised DNS suffixes to offsets in message.
+    When supplied, name_offsets maps normalised DNS suffixes to their
+    absolute offsets in the complete DNS message.
     """
     if name == ".":
-        root_offset = len(message)
-        name_offsets.setdefault(".", root_offset)
+        if name_offsets is not None:
+            name_offsets.setdefault(".", len(message))
         message.append(0)
         return
 
@@ -144,7 +105,7 @@ def encode_name_compressed(name, message, name_offsets):
     for index, label in enumerate(labels):
         suffix = ".".join(labels[index:]).lower() + "."
 
-        if suffix in name_offsets:
+        if name_offsets is not None and suffix in name_offsets:
             pointer_offset = name_offsets[suffix]
 
             if pointer_offset >= 0x4000:
@@ -154,7 +115,8 @@ def encode_name_compressed(name, message, name_offsets):
             message.extend(struct.pack("!H", pointer))
             return
 
-        name_offsets[suffix] = len(message)
+        if name_offsets is not None:
+            name_offsets[suffix] = len(message)
 
         label_bytes = label.encode("ascii")
 
@@ -164,155 +126,56 @@ def encode_name_compressed(name, message, name_offsets):
         message.append(len(label_bytes))
         message.extend(label_bytes)
 
-    name_offsets.setdefault(".", len(message))
+    if name_offsets is not None:
+        name_offsets.setdefault(".", len(message))
     message.append(0)
 
 
-def append_question_compressed(
-    message,
-    question,
-    name_offsets,
-):
-    encode_name_compressed(
-        question.qname,
-        message,
-        name_offsets,
-    )
+def _append_question(message, question, name_offsets=None):
+    _append_name(message, question.qname, name_offsets)
     message.extend(encode_uint16(question.qtype))
     message.extend(encode_uint16(question.qclass))
 
 
-def append_rdata_compressed(
-    message,
-    record,
-    name_offsets,
-):
+def _append_mx_rdata(message, rdata, name_offsets=None):
+    message.extend(encode_uint16(rdata["preference"]))
+    _append_name(message, rdata["exchange"], name_offsets)
+
+
+def _append_rdata(message, record, name_offsets=None):
     if record.rtype == 1:
         message.extend(encode_a_rdata(record.rdata))
         return
 
     if record.rtype in (2, 5, 12):
-        encode_name_compressed(
-            record.rdata,
-            message,
-            name_offsets,
-        )
+        _append_name(message, record.rdata, name_offsets)
         return
 
     if record.rtype == 15:
-        preference = record.rdata["preference"]
-        exchange = record.rdata["exchange"]
-
-        message.extend(encode_uint16(preference))
-        encode_name_compressed(
-            exchange,
-            message,
-            name_offsets,
-        )
+        _append_mx_rdata(message, record.rdata, name_offsets)
         return
 
     raise ValueError(f"Unsupported DNS record type: {record.rtype}")
 
 
-def append_resource_record_compressed(
-    message,
-    record,
-    name_offsets,
-):
-    encode_name_compressed(
-        record.name,
-        message,
-        name_offsets,
-    )
-
-    message.extend(encode_uint16(record.rtype))
-    message.extend(encode_uint16(record.rclass))
-    message.extend(encode_uint32(record.ttl))
+def _append_resource_record(message, record, name_offsets=None):
+    _append_name(message, record.name, name_offsets)
+    message.extend(struct.pack("!HHI", record.rtype, record.rclass, record.ttl))
 
     rdlength_position = len(message)
     message.extend(b"\x00\x00")
 
     rdata_start = len(message)
-
-    append_rdata_compressed(
-        message,
-        record,
-        name_offsets,
-    )
-
+    _append_rdata(message, record, name_offsets)
     rdlength = len(message) - rdata_start
 
+    # Root hints records store RDLENGTH as 0, so calculate it from encoded RDATA.
     message[rdlength_position : rdlength_position + 2] = encode_uint16(rdlength)
 
 
-def append_records_compressed(
-    message,
-    records,
-    name_offsets,
-):
+def _append_records(message, records, name_offsets=None):
     for record in records:
-        append_resource_record_compressed(
-            message,
-            record,
-            name_offsets,
-        )
-
-
-def encode_dns_response_compressed(
-    query_header,
-    question,
-    answers=None,
-    authorities=None,
-    additional=None,
-    rcode=0,
-    aa=0,
-):
-    answers = [] if answers is None else answers
-    authorities = [] if authorities is None else authorities
-    additional = [] if additional is None else additional
-
-    flags = build_response_flags(
-        query_header,
-        rcode,
-        aa,
-    )
-
-    message = bytearray(
-        encode_header(
-            message_id=query_header.message_id,
-            flags=flags,
-            question_count=1,
-            answer_count=len(answers),
-            authority_count=len(authorities),
-            additional_count=len(additional),
-        )
-    )
-
-    name_offsets = {}
-
-    append_question_compressed(
-        message,
-        question,
-        name_offsets,
-    )
-
-    append_records_compressed(
-        message,
-        answers,
-        name_offsets,
-    )
-    append_records_compressed(
-        message,
-        authorities,
-        name_offsets,
-    )
-    append_records_compressed(
-        message,
-        additional,
-        name_offsets,
-    )
-
-    return bytes(message)
+        _append_resource_record(message, record, name_offsets)
 
 
 def build_upstream_query_flags():
@@ -347,24 +210,21 @@ def encode_dns_response(
 
     flags = build_response_flags(query_header, rcode, aa)
 
-    header_bytes = encode_header(
-        message_id=query_header.message_id,
-        flags=flags,
-        question_count=1,
-        answer_count=len(answers),
-        authority_count=len(authorities),
-        additional_count=len(additional),
+    message = bytearray(
+        encode_header(
+            message_id=query_header.message_id,
+            flags=flags,
+            question_count=1,
+            answer_count=len(answers),
+            authority_count=len(authorities),
+            additional_count=len(additional),
+        )
     )
 
-    question_bytes = encode_question(question)
-    answer_bytes = encode_records(answers)
-    authority_bytes = encode_records(authorities)
-    additional_bytes = encode_records(additional)
+    name_offsets = {}
+    _append_question(message, question, name_offsets)
+    _append_records(message, answers, name_offsets)
+    _append_records(message, authorities, name_offsets)
+    _append_records(message, additional, name_offsets)
 
-    return (
-        header_bytes
-        + question_bytes
-        + answer_bytes
-        + authority_bytes
-        + additional_bytes
-    )
+    return bytes(message)

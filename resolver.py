@@ -3,7 +3,7 @@ import sys
 import threading
 
 from cache import DNSCache
-from dns.encoder import encode_dns_response, encode_dns_response_compressed
+from dns.encoder import encode_dns_response
 from dns.message import parse_header, parse_questions
 from resolver_core.constants import (
     MAX_CLIENT_DNS_RESPONSE_SIZE,
@@ -69,25 +69,6 @@ def encode_client_response_safely(
 
     if response is not None and len(response) <= MAX_CLIENT_DNS_RESPONSE_SIZE:
         return response
-
-    try:
-        compressed_response = encode_dns_response_compressed(
-            query_header,
-            question,
-            answers,
-            authorities,
-            additional,
-            rcode,
-            aa,
-        )
-    except ValueError:
-        compressed_response = None
-
-    if (
-        compressed_response is not None
-        and len(compressed_response) <= MAX_CLIENT_DNS_RESPONSE_SIZE
-    ):
-        return compressed_response
 
     servfail_response = encode_dns_response(
         query_header=query_header,

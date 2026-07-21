@@ -1,8 +1,15 @@
 import unittest
 from unittest.mock import patch
 
-from dns.encoder import encode_dns_response, encode_upstream_query
+from dns.encoder import (
+    encode_dns_response,
+    encode_question,
+    encode_records,
+    encode_upstream_query,
+)
 from dns.message import parse_dns_message
+from resolver import encode_client_response_safely
+from resolver_core.constants import MAX_CLIENT_DNS_RESPONSE_SIZE, RCODE_SERVFAIL
 from test.helpers import header, question, rr
 
 
@@ -36,6 +43,88 @@ class EncoderResponseSpecificationTests(unittest.TestCase):
         parsed = parse_dns_message(wire)
         self.assertEqual((parsed.header.qdcount, parsed.header.ancount, parsed.header.nscount, parsed.header.arcount), (1, 1, 1, 1))
         self.assertEqual(parsed.questions[0].qname, "www.example.com.")
+
+    def test_response_compresses_names_in_owners_and_supported_rdata(self):
+        records = [
+            rr("www.example.com.", 1, "192.0.2.1"),
+            rr("example.com.", 2, "ns.example.com."),
+            rr("alias.example.com.", 5, "www.example.com."),
+            rr("1.2.0.192.in-addr.arpa.", 12, "www.example.com."),
+            rr(
+                "example.com.",
+                15,
+                {"preference": 10, "exchange": "mail.example.com."},
+            ),
+        ]
+
+        wire = encode_dns_response(header(), question(), records)
+        parsed = parse_dns_message(wire)
+
+        self.assertIn(b"\xc0\x0c", wire)
+        self.assertEqual(parsed.header.ancount, len(records))
+        self.assertEqual([record.rdata for record in parsed.answers], [
+            "192.0.2.1",
+            "ns.example.com.",
+            "www.example.com.",
+            "www.example.com.",
+            {"preference": 10, "exchange": "mail.example.com."},
+        ])
+
+    def test_compression_keeps_repeated_records_within_udp_limit(self):
+        original_question = question()
+        answers = [
+            rr("www.example.com.", 1, f"192.0.2.{index}")
+            for index in range(1, 21)
+        ]
+
+        uncompressed_size = 12 + len(encode_question(original_question)) + len(
+            encode_records(answers)
+        )
+        wire = encode_client_response_safely(header(), original_question, answers)
+        parsed = parse_dns_message(wire)
+
+        self.assertGreater(uncompressed_size, MAX_CLIENT_DNS_RESPONSE_SIZE)
+        self.assertLessEqual(len(wire), MAX_CLIENT_DNS_RESPONSE_SIZE)
+        self.assertEqual(parsed.header.rcode, 0)
+        self.assertEqual(parsed.header.ancount, len(answers))
+
+    def test_encoding_error_returns_servfail(self):
+        wire = encode_client_response_safely(
+            header(),
+            question(),
+            answers=[rr("www.example.com.", 1, "not-an-ip-address")],
+            aa=1,
+        )
+        parsed = parse_dns_message(wire)
+
+        self.assertEqual(parsed.header.rcode, RCODE_SERVFAIL)
+        self.assertEqual(parsed.header.aa, 0)
+        self.assertEqual(parsed.header.ancount, 0)
+
+    def test_response_too_large_after_compression_returns_servfail(self):
+        answers = [
+            rr("www.example.com.", 1, f"192.0.2.{(index % 254) + 1}")
+            for index in range(40)
+        ]
+
+        wire = encode_client_response_safely(
+            header(),
+            question(),
+            answers,
+            authorities=[rr("example.com.", 2, "ns.example.com.")],
+            additional=[rr("ns.example.com.", 1, "192.0.2.53")],
+            aa=1,
+        )
+        parsed = parse_dns_message(wire)
+
+        self.assertLessEqual(len(wire), MAX_CLIENT_DNS_RESPONSE_SIZE)
+        self.assertEqual(parsed.header.rcode, RCODE_SERVFAIL)
+        self.assertEqual(parsed.header.aa, 0)
+        self.assertEqual(parsed.header.tc, 0)
+        self.assertEqual(
+            (parsed.header.ancount, parsed.header.nscount, parsed.header.arcount),
+            (0, 0, 0),
+        )
 
 
 if __name__ == "__main__":
