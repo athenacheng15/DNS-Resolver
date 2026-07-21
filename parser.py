@@ -1,6 +1,6 @@
 import sys
-from dns_message import parse_header, parse_questions, parse_resource_records
-from dns_records import RCODE_MAP, TYPE_MAP, CLASS_MAP
+from dns.message import parse_header, parse_questions, parse_resource_records
+from dns.records import RCODE_MAP, TYPE_MAP, CLASS_MAP
 
 
 def format_type(type_number):

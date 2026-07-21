@@ -1,5 +1,5 @@
 from cProfile import label
-from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
+from dns.records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
 
 
 # Ensure that there are enough bytes remaining to read.
@@ -64,7 +64,8 @@ def parse_name(data, offset):
     jumped = False
     original_offset = offset
     jumps = 0
-    total_length = 0
+    # A fully decoded DNS name includes the final zero-length root label.
+    total_length = 1
     visited_offsets = set()
 
     while True:
