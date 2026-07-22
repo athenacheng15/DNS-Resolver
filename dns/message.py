@@ -1,5 +1,7 @@
 from cProfile import label
-from dns_records import DNSHeader, DNSQuestion, ResourceRecord, DNSMessage, TYPE_MAP
+
+from constants import TYPE_A, TYPE_CNAME, TYPE_MAP, TYPE_MX, TYPE_NS, TYPE_PTR
+from dns.records import DNSHeader, DNSMessage, DNSQuestion, ResourceRecord
 
 
 # Ensure that there are enough bytes remaining to read.
@@ -64,7 +66,8 @@ def parse_name(data, offset):
     jumped = False
     original_offset = offset
     jumps = 0
-    total_length = 0
+    # A fully decoded DNS name includes the final zero-length root label.
+    total_length = 1
     visited_offsets = set()
 
     while True:
@@ -183,7 +186,7 @@ def parse_rdata(data, offset, rtype, rdlength):
     try:
 
         # A record: must be exactly 4 bytes
-        if rtype == 1:
+        if rtype == TYPE_A:
             if rdlength != 4:
                 return malformed_rdata("A record RDATA must be 4 bytes"), rdata_end
 
@@ -191,14 +194,14 @@ def parse_rdata(data, offset, rtype, rdlength):
             return ".".join(str(byte) for byte in rdata), rdata_end
 
         # NS, CNAME, PTR: RDATA is a domain name
-        if rtype in (2, 5, 12):
+        if rtype in (TYPE_NS, TYPE_CNAME, TYPE_PTR):
             name, name_end = parse_name(data, offset)
             type_name = TYPE_MAP[rtype]
             validate_rdata_name_end(name_end, rdata_end, type_name)
             return name, rdata_end
 
         # MX: 2 bytes preference + domain name
-        if rtype == 15:
+        if rtype == TYPE_MX:
             if rdlength < 3:
                 return malformed_rdata("MX record RDATA is too short"), rdata_end
 
