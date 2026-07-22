@@ -1,7 +1,7 @@
 # Iterative DNS Resolver
 
-A DNS message parser and iterative DNS resolver written in Python for the
-UNSW COMP3331/9331 Computer Networks and Applications assignment.
+A DNS message parser and iterative DNS resolver written in Python to explore
+how DNS messages, referrals, caching, and name resolution work in practice.
 
 The resolver starts from a root hints file, follows DNS referrals without
 requesting recursion from upstream servers, chases CNAME records, and returns
@@ -90,8 +90,8 @@ python3 -m unittest discover -s test -v
 
 It covers parsing, encoding, root hints, referral and CNAME handling, caching,
 upstream validation, resolution limits, and concurrent UDP server behavior.
-These tests supplement rather than replace the course marking suite; live
-network behavior still depends on the execution environment.
+The tests use simulated DNS traffic; live network behavior still depends on
+the execution environment.
 
 ## Project structure
 
@@ -127,6 +127,6 @@ network behavior still depends on the execution environment.
 
 ## Root hints format
 
-The root hints parser accepts the assignment's zone-file subset: `$TTL`
-directives plus `IN NS` and `IN A` records. Comments beginning with `;` are
-ignored. A sample file is available at `src/named.root`.
+The root hints parser accepts a small zone-file subset: `$TTL` directives plus
+`IN NS` and `IN A` records. Comments beginning with `;` are ignored. A sample
+file is available at `src/named.root`.
